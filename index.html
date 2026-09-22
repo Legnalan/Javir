@@ -1,0 +1,216 @@
+<!doctype html>
+<html lang="es-MX">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#0f172a" />
+    <meta name="description" content="Javir, espacio visual para explorar arquitectura de software." />
+    <title>Javir · Visual Developer Workspace</title>
+    <link rel="stylesheet" href="/src/styles.css" />
+    <link rel="stylesheet" href="/src/solar.css" />
+  </head>
+  <body>
+    <a class="skip-link" href="#main-content">Saltar al espacio de trabajo</a>
+
+    <button class="menu-anchor" id="menu-anchor" type="button" aria-controls="manual-menu" aria-expanded="false" title="Abrir controles manuales">
+      <span class="icon" data-icon="menu" aria-hidden="true"></span>
+      <span>Controles</span>
+    </button>
+
+    <aside class="manual-menu" id="manual-menu" aria-label="Controles manuales" aria-hidden="true" hidden>
+      <div class="manual-menu-shell">
+        <div class="manual-menu-heading">
+          <div>
+            <span class="eyebrow">JAVIR · PALETA FLOTANTE</span>
+            <h2>Controles manuales</h2>
+          </div>
+          <button class="icon-button on-dark" id="manual-menu-close" type="button" aria-label="Cerrar controles manuales" title="Cerrar controles manuales">
+            <span class="icon" data-icon="close" aria-hidden="true"></span>
+          </button>
+        </div>
+        <div class="manual-menu-content" id="manual-menu-content"></div>
+      </div>
+    </aside>
+
+    <header class="topbar">
+      <div class="brand-lockup" aria-label="Javir, workspace visual">
+        <span class="brand-mark" aria-hidden="true"><span></span><span></span><span></span></span>
+        <span>
+          <strong>JAVIR</strong>
+          <small>VISUAL DEVELOPER WORKSPACE</small>
+        </span>
+      </div>
+      <div class="topbar-context">
+        <span class="status-dot" aria-hidden="true"></span>
+        <span id="connection-status">Local / seguro</span>
+        <span class="separator" aria-hidden="true"></span>
+        <span class="mono-label">MVP v0.1</span>
+      </div>
+      <div class="topbar-actions">
+        <button class="icon-button" id="camera-toggle" type="button" aria-label="Activar cámara" aria-pressed="false" title="Activar cámara">
+          <span class="icon" data-icon="camera" aria-hidden="true"></span>
+        </button>
+        <button class="icon-button" id="help-button" type="button" aria-label="Mostrar ayuda" title="Mostrar ayuda">
+          <span class="icon" data-icon="help" aria-hidden="true"></span>
+        </button>
+        <button class="avatar-button" type="button" aria-label="Perfil local">AG</button>
+      </div>
+    </header>
+
+    <div class="workspace-layout">
+      <aside class="sidebar" aria-label="Navegación del workspace">
+        <div class="sidebar-section">
+          <div class="section-kicker"><span>SESIONES</span><button class="mini-button" id="new-session" type="button" aria-label="Nueva sesión" title="Nueva sesión"><span class="icon" data-icon="plus" aria-hidden="true"></span></button></div>
+          <button class="session-row is-active" type="button" aria-current="page">
+            <span class="session-glyph" aria-hidden="true"><span></span></span>
+            <span class="session-copy"><strong>Índice de Javir</strong><small>Repositorio local · solo lectura</small></span>
+            <span class="session-more" aria-hidden="true">•••</span>
+          </button>
+          <button class="session-row" type="button" disabled>
+            <span class="session-glyph muted" aria-hidden="true"><span></span></span>
+            <span class="session-copy"><strong>Próxima sesión</strong><small>Disponible después de guardar</small></span>
+          </button>
+        </div>
+
+        <div class="sidebar-section sidebar-tools">
+          <div class="section-kicker"><span>HERRAMIENTAS</span></div>
+          <button class="tool-row" id="analyze-button" type="button"><span class="tool-icon" data-icon="scan" aria-hidden="true"></span><span>Analizar proyecto</span><kbd>⌘ K</kbd></button>
+          <button class="tool-row" id="add-object-button" type="button"><span class="tool-icon" data-icon="node" aria-hidden="true"></span><span>Agregar objeto</span><kbd>⌘ N</kbd></button>
+          <button class="tool-row" id="save-button" type="button"><span class="tool-icon" data-icon="save" aria-hidden="true"></span><span>Guardar escena</span><kbd>⌘ S</kbd></button>
+        </div>
+
+        <div class="sidebar-footnote">
+          <span class="footnote-icon" data-icon="shield" aria-hidden="true"></span>
+          <p><strong>Modo local</strong><br />La escena no sale de este dispositivo.</p>
+        </div>
+      </aside>
+
+      <main class="main-content" id="main-content" tabindex="-1">
+        <div class="page-heading">
+          <div>
+            <div class="breadcrumb"><span>WORKSPACE</span><span>/</span><strong>ESCENA ACTIVA</strong></div>
+            <h1 id="scene-name">Índice de Javir</h1>
+            <p>Explora el código como un holograma. Selecciona un módulo o manipula el lienzo con las manos.</p>
+          </div>
+          <div class="heading-actions">
+            <span class="scene-count" id="scene-count">06 objetos · 05 relaciones</span>
+            <button class="secondary-button" id="undo-button" type="button" disabled><span class="icon" data-icon="undo" aria-hidden="true"></span>Deshacer</button>
+          </div>
+        </div>
+
+        <section class="scene-panel" aria-labelledby="scene-title">
+          <div class="scene-toolbar">
+            <div class="scene-toolbar-title"><span class="live-pulse" aria-hidden="true"></span><span id="scene-title">MAPA DEL PROYECTO</span><span class="toolbar-divider" aria-hidden="true"></span><span class="muted-text">Holograma 3D · órbita + paneo + zoom</span></div>
+            <div class="scene-toolbar-actions">
+              <span class="camera-state" id="camera-state"><span class="icon" data-icon="camera-off" aria-hidden="true"></span>Cámara apagada</span>
+              <button class="gesture-toggle" id="gesture-toggle" type="button" aria-label="Activar control por gestos" title="Activar control por gestos" aria-pressed="false"><span class="icon" data-icon="hand" aria-hidden="true"></span><span>Gestos</span></button>
+              <span class="spatial-readout" id="spatial-depth-readout">Plano estimado</span>
+              <button class="icon-button on-dark" id="spatial-recenter" type="button" aria-label="Recentrar manipulador espacial" title="Recentrar manipulador espacial"><span class="icon" data-icon="center" aria-hidden="true"></span></button>
+              <button class="icon-button on-dark" id="zoom-out" type="button" aria-label="Reducir zoom" title="Reducir zoom"><span class="icon" data-icon="minus" aria-hidden="true"></span></button>
+              <span class="zoom-readout" id="zoom-readout">100%</span>
+              <button class="icon-button on-dark" id="zoom-in" type="button" aria-label="Aumentar zoom" title="Aumentar zoom"><span class="icon" data-icon="plus" aria-hidden="true"></span></button>
+              <button class="icon-button on-dark" id="reset-scene" type="button" aria-label="Restablecer vista" title="Restablecer vista"><span class="icon" data-icon="center" aria-hidden="true"></span></button>
+            </div>
+          </div>
+
+          <div class="scene-viewport" id="scene-viewport">
+            <div class="camera-layer" id="camera-layer" aria-hidden="true"><video id="camera-preview" autoplay playsinline muted></video><div class="camera-wash"></div></div>
+            <canvas class="gesture-canvas" id="gesture-canvas" aria-hidden="true"></canvas>
+            <div class="scene-grid" aria-hidden="true"></div>
+            <div class="scene-orbit orbit-one" aria-hidden="true"></div>
+            <div class="scene-orbit orbit-two" aria-hidden="true"></div>
+            <div class="scene-stage" id="scene-stage">
+              <div class="scene-camera" id="scene-camera">
+                <div class="scene-volume-guides" aria-hidden="true">
+                  <div class="scene-volume-frame">
+                    <span class="volume-plane volume-plane-back"></span>
+                    <span class="volume-plane volume-plane-floor"></span>
+                    <span class="volume-plane volume-plane-side"></span>
+                    <span class="volume-axis volume-axis-x"></span>
+                    <span class="volume-axis volume-axis-y"></span>
+                    <span class="volume-axis volume-axis-z"></span>
+                  </div>
+                </div>
+                <div class="scene-edges" id="scene-edges" aria-hidden="true"></div>
+                <div class="scene-nodes" id="scene-nodes" aria-label="Objetos de la escena"></div>
+              </div>
+            </div>
+            <div class="gesture-overlay" id="gesture-overlay" role="status" aria-live="polite">
+              <span class="gesture-indicator" aria-hidden="true"><span class="icon" data-icon="hand"></span></span>
+              <span class="gesture-copy"><strong id="gesture-status">Gestos apagados</strong><small id="gesture-hint">Activa Gestos para seleccionar con el índice, mover cards con índice + pulgar y 3 dedos arriba, hacer paneo con dos manos abiertas o orbitar con un puño y la otra palma fija.</small></span>
+              <button class="gesture-detail-button" id="gesture-detail-button" type="button" aria-controls="inspector-content" hidden>Detalle</button>
+            </div>
+            <div class="scene-hint"><span class="icon" data-icon="move" aria-hidden="true"></span><span>Puño + palma fija: órbita · dos manos abiertas: paneo · dos pinzas juntas: zoom · índice: selecciona</span></div>
+            <div class="scene-empty" id="scene-empty" hidden>
+              <span class="empty-icon" data-icon="node" aria-hidden="true"></span>
+              <strong>La escena está lista</strong>
+              <span>Agrega un objeto o usa la barra de comandos.</span>
+            </div>
+          </div>
+
+          <div class="scene-footer">
+            <div class="legend" aria-label="Leyenda de estados"><span><i class="legend-dot violet"></i>Aplicación</span><span><i class="legend-dot green"></i>Módulo</span><span><i class="legend-dot amber"></i>Datos</span><span><i class="legend-dot rose"></i>Externo</span></div>
+              <span class="scene-footnote" id="scene-footnote">Fuente: índice local de Javir · cargando…</span>
+          </div>
+        </section>
+
+        <section class="command-section" aria-labelledby="command-title">
+          <div class="command-heading"><div><span class="eyebrow">JARVIS CORE</span><h2 id="command-title">¿Qué quieres explorar?</h2></div><span class="command-status" id="command-status"><span class="status-dot"></span>Listo para recibir</span></div>
+          <form class="command-bar" id="command-form">
+            <span class="command-spark" aria-hidden="true"><span class="icon" data-icon="spark" aria-hidden="true"></span></span>
+            <label class="sr-only" for="command-input">Comando para Javir</label>
+            <input id="command-input" type="text" autocomplete="off" placeholder="Ej. “Agrega el servicio de reportes”" />
+            <button class="voice-button" id="voice-button" type="button" aria-label="Usar comando de voz" aria-pressed="false" title="Usar comando de voz"><span class="icon" data-icon="mic" aria-hidden="true"></span><span class="voice-label">Voz</span></button>
+            <button class="send-button" type="submit" aria-label="Enviar comando" title="Enviar comando"><span class="icon" data-icon="arrow-up" aria-hidden="true"></span></button>
+          </form>
+          <div class="suggestion-row" aria-label="Comandos sugeridos">
+            <button class="suggestion-chip" type="button" data-command="Agrega el servicio de reportes"><span class="icon" data-icon="plus" aria-hidden="true"></span>Agregar reportes</button>
+            <button class="suggestion-chip" type="button" data-command="Muestra las dependencias de Facturación"><span class="icon" data-icon="layers" aria-hidden="true"></span>Ver dependencias</button>
+            <button class="suggestion-chip" type="button" data-command="Guarda la escena"><span class="icon" data-icon="save" aria-hidden="true"></span>Guardar escena</button>
+            <button class="suggestion-chip" type="button" data-command="Ayuda"><span class="icon" data-icon="help" aria-hidden="true"></span>Ayuda</button>
+          </div>
+        </section>
+      </main>
+
+      <aside class="inspector" aria-label="Inspector del objeto seleccionado">
+        <div class="inspector-header"><div><span class="eyebrow">INSPECTOR</span><h2>Objeto seleccionado</h2></div><button class="icon-button on-dark" id="close-inspector" type="button" aria-label="Cerrar inspector" title="Cerrar inspector"><span class="icon" data-icon="close" aria-hidden="true"></span></button></div>
+        <div id="inspector-content"></div>
+      </aside>
+    </div>
+
+    <div class="toast-region" id="toast-region" aria-live="polite" aria-atomic="true"></div>
+
+    <dialog class="object-dialog" id="object-dialog" aria-labelledby="dialog-title">
+      <form method="dialog" id="object-form">
+        <div class="dialog-header"><div><span class="eyebrow">NUEVO OBJETO</span><h2 id="dialog-title">Añade un elemento a la escena</h2></div><button class="icon-button on-dark" value="cancel" type="submit" aria-label="Cerrar diálogo"><span class="icon" data-icon="close" aria-hidden="true"></span></button></div>
+        <label for="object-name">Nombre</label>
+        <input id="object-name" name="name" required maxlength="40" placeholder="Ej. Autenticación" />
+        <label for="object-type">Tipo</label>
+        <select id="object-type" name="type"><option value="module">Módulo</option><option value="service">Servicio</option><option value="api">API</option><option value="database">Base de datos</option><option value="external">Externo</option></select>
+        <div class="dialog-actions"><button class="secondary-button" value="cancel" type="submit">Cancelar</button><button class="primary-button" id="create-object" value="default" type="submit">Crear objeto</button></div>
+      </form>
+    </dialog>
+
+    <dialog class="object-dialog" id="analysis-dialog" aria-labelledby="analysis-dialog-title">
+      <form method="dialog" id="analysis-form">
+        <div class="dialog-header"><div><span class="eyebrow">ADAPTADOR LOCAL</span><h2 id="analysis-dialog-title">Mapear un repositorio</h2></div><button class="icon-button on-dark" value="cancel" type="submit" aria-label="Cerrar diálogo"><span class="icon" data-icon="close" aria-hidden="true"></span></button></div>
+        <label for="analysis-path">Ruta del repositorio</label>
+        <input id="analysis-path" name="path" required spellcheck="false" placeholder="Tu carpeta local de proyectos" />
+        <p class="dialog-helper"><span class="icon" data-icon="shield" aria-hidden="true"></span>Solo se permiten carpetas dentro de la carpeta local configurada. No se escriben archivos ni se envían datos.</p>
+        <div class="dialog-actions"><button class="secondary-button" value="cancel" type="submit">Cancelar</button><button class="primary-button" id="run-analysis" value="default" type="submit">Analizar en solo lectura</button></div>
+      </form>
+    </dialog>
+
+    <dialog class="source-dialog" id="source-dialog" aria-labelledby="source-dialog-title">
+      <form method="dialog" id="source-form">
+        <div class="dialog-header"><div><span class="eyebrow">EVIDENCIA LOCAL</span><h2 id="source-dialog-title">Fragmento de código</h2></div><button class="icon-button on-dark" value="cancel" type="submit" aria-label="Cerrar visor de código"><span class="icon" data-icon="close" aria-hidden="true"></span></button></div>
+        <div class="source-dialog-meta"><code id="source-meta">Cargando…</code><span id="source-status">Solo lectura</span></div>
+        <pre class="source-code" aria-label="Código fuente mostrado"><code id="source-content"></code></pre>
+        <div class="dialog-actions"><button class="secondary-button" value="cancel" type="submit">Cerrar</button></div>
+      </form>
+    </dialog>
+
+    <button type="button" class="solar-launcher" id="solar-launcher">Sistema solar</button>
+    <script type="module" src="/src/main.js"></script>
+  </body>
+</html>

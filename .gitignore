@@ -1,0 +1,7 @@
+.DS_Store
+node_modules/
+.codebase-memory/
+.env
+dist/
+coverage/
+public/generated/
