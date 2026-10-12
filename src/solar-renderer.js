@@ -1,102 +1,146 @@
-import tgpu, { d } from 'typegpu';
+import * as THREE from 'three';
+import { PLANETS } from './solar-math.js';
 
-const shader = /* wgsl */ `
-@group(0) @binding(0) var<uniform> u: array<vec4f,32>;
-@group(0) @binding(1) var bodies: texture_2d<f32>;
-@vertex fn vs(@builtin(vertex_index) id:u32) -> @builtin(position) vec4f {
-  var p=array<vec2f,3>(vec2f(-1,-1),vec2f(3,-1),vec2f(-1,3));
-  return vec4f(p[id],0,1);
-}
-fn rot(v:vec3f) -> vec3f {
-  let a=u[2].xyz; let c=cos(a); let s=sin(a);
-  let x=vec3f(v.x,v.y*c.x-v.z*s.x,v.y*s.x+v.z*c.x);
-  let y=vec3f(x.x*c.y+x.z*s.y,x.y,-x.x*s.y+x.z*c.y);
-  return vec3f(y.x*c.z-y.y*s.z,y.x*s.z+y.y*c.z,y.z);
-}
-@fragment fn fs(@builtin(position) pixel:vec4f) -> @location(0) vec4f {
-  let uv=pixel.xy/u[0].xy;
-  let rd=normalize(vec3f((uv.x-.5)*u[0].x/u[0].y,.5-uv.y,1.25));
-  var nearest=10000.; var color=vec3f(0.); var alpha=0.;
-  for(var i=0u;i<9u;i++) {
-    let sphere=u[4u+i]; let oc=-sphere.xyz;
-    let b=dot(oc,rd); let c=dot(oc,oc)-sphere.w*sphere.w; let h=b*b-c;
-    if(h>=0.) {
-      let t=-b-sqrt(h);
-      if(t>.05 && t<nearest) {
-        nearest=t; let n=normalize(rd*t-sphere.xyz);
-        let light=normalize(u[4].xyz-sphere.xyz+n*.001);
-        let diffuse=max(.23,dot(n,light));
-        let bands=.88+.12*sin(n.y*30.+sin(n.x*12.)*2.+u[3].x*.3);
-        color=u[13u+i].xyz*diffuse*bands;
-        if(i==0u) { color=u[13].xyz*(1.1+.12*sin(n.x*12.+n.y*17.+sin(n.z*20.)+u[3].x)); }
-        if(i==3u) { let land=sin(n.x*16.+u[3].x*.1)+sin(n.y*19.)+sin(n.z*15.); color=mix(color,vec3f(.12,.58,.32)*diffuse,smoothstep(.7,1.1,land)); }
-        color+=vec3f(.12,.32,.45)*pow(1.-max(0.,dot(n,-rd)),3.); alpha=1.;
-      }
+// Texturas locales e ilustrativas: sin descargas ni dependencias de imágenes.
+function surfaceTexture(index) {
+  const width=256,height=128,data=new Uint8Array(width*height*4);
+  const base=new THREE.Color(...PLANETS[index][3]);
+  for(let y=0;y<height;y++)for(let x=0;x<width;x++){
+    const u=x/width*Math.PI*2,v=y/height*Math.PI;
+    const noise=Math.sin(u*13+Math.sin(v*11)*2)*Math.sin(v*19+Math.cos(u*7));
+    let color=base.clone().multiplyScalar(.8+noise*.15);
+    if(index===0)color.setRGB(1,.45+.22*Math.sin(v*20+noise*2),.035);
+    if(index===3){
+      const land=Math.sin(u*3+Math.cos(v*7))+Math.cos(u*7-v*4)+noise*.4;
+      color.set(land>.55?0x428452:0x1769b5);
+      if(y<9||y>height-10)color.set(0xe4f4ff);
+      else if(Math.sin(u*17+v*13)+noise>1.25)color.lerp(new THREE.Color(0xf1f7ff),.8);
     }
-  }
-  // Órbitas y anillos en planos 3D: participan en la misma comparación de profundidad.
-  let normal=rot(vec3f(0,1,0)); let denom=dot(rd,normal);
-  if(abs(denom)>.0001) {
-    let t=dot(u[1].xyz,normal)/denom;
-    let point=rd*t-u[1].xyz; let radius=length(point)/u[1].w;
-    var orbits=array<f32,8>(1.05,1.5,2.,2.55,3.3,4.25,5.15,6.);
-    var line=0.;
-    let thickness=max(.009,t/u[0].y/u[1].w);
-    for(var i=0u;i<8u;i++) { line=max(line,1.-smoothstep(thickness,thickness*2.,abs(radius-orbits[i]))); }
-    if(t>.05 && t<nearest && line>.01) { nearest=t; color=vec3f(.23,.66,.85); alpha=line*.48; }
-    let st=dot(u[10].xyz,normal)/denom;
-    let sr=length(rd*st-u[10].xyz)/u[10].w;
-    if(st>.05 && st<nearest && sr>1.35 && sr<2.25) {
-      nearest=st; color=vec3f(.78,.66,.46); alpha=.75*(.7+.3*sin(sr*65.));
+    if(index===5||index===6){
+      const band=.5+.5*Math.sin(v*(index===5?34:45)+noise*.7);
+      color.lerp(new THREE.Color(index===5?0xf4d4ad:0xf4dea7),band*.6);
+      if(index===5&&Math.sin(u+.6)>.985&&y>68&&y<78)color.set(0xb35b35);
     }
+    const offset=(y*width+x)*4;
+    data[offset]=Math.round(Math.min(1,color.r)*255);data[offset+1]=Math.round(Math.min(1,color.g)*255);data[offset+2]=Math.round(Math.min(1,color.b)*255);data[offset+3]=255;
   }
-  // Textura de profundidad corporal en coordenadas del video sin espejo.
-  let fit=max(u[0].x/u[0].z,u[0].y/u[0].w);
-  let videoUV=vec2f(1.-(pixel.x+(u[0].z*fit-u[0].x)*.5)/(u[0].z*fit),
-    (pixel.y+(u[0].w*fit-u[0].y)*.5)/(u[0].w*fit));
-  let size=textureDimensions(bodies);
-  let coord=clamp(vec2i(videoUV*vec2f(size)),vec2i(0),vec2i(size)-1);
-  let body=textureLoad(bodies,coord,0);
-  if(u[3].y>0.5 && body.x>0. && body.x<nearest*rd.z) {
-    alpha*=1.-smoothstep(.4,.75,body.y);
-  }
-  if(u[3].z>.5 && body.y>.4) { return vec4f(vec3f(.08,.85,.72)*.28,.28); }
-  return vec4f(color*alpha,alpha);
+  const texture=new THREE.DataTexture(data,width,height);
+  texture.colorSpace=THREE.SRGBColorSpace;texture.wrapS=THREE.RepeatWrapping;
+  texture.magFilter=THREE.LinearFilter;texture.minFilter=THREE.LinearFilter;texture.needsUpdate=true;
+  return texture;
+}
+const maskDeclarations=`uniform sampler2D solarBodies;
+uniform vec4 solarViewport;
+uniform float solarOcclusion;
+varying float solarDepth;
+vec2 solarVideoUV(){
+  vec2 pixel=vec2(gl_FragCoord.x,solarViewport.y-gl_FragCoord.y);
+  float fit=max(solarViewport.x/solarViewport.z,solarViewport.y/solarViewport.w);
+  return vec2(1.-(pixel.x+(solarViewport.z*fit-solarViewport.x)*.5)/(solarViewport.z*fit),
+    (pixel.y+(solarViewport.w*fit-solarViewport.y)*.5)/(solarViewport.w*fit));
 }`;
 
 export class SolarRenderer {
-  async initialize(canvas,onError) {
-    if(!navigator.gpu) throw new Error('WebGPU no disponible. Abre la maqueta en Brave o Chrome con aceleración gráfica.');
-    this.root=await tgpu.init(); this.device=this.root.device;
-    this.device.lost.then(info=>onError?.('Se perdió la GPU: '+info.message));
-    this.device.addEventListener('uncapturederror',e=>onError?.(e.error.message));
-    this.canvas=canvas; this.context=canvas.getContext('webgpu');
-    const format=navigator.gpu.getPreferredCanvasFormat();
-    this.context.configure({device:this.device,format,alphaMode:'premultiplied'});
-    this.uniform=this.root.createBuffer(d.arrayOf(d.vec4f,32)).$usage('uniform');
-    const module=this.device.createShaderModule({code:shader});
-    const compilation=await module.getCompilationInfo();
-    const errors=compilation.messages.filter(m=>m.type==='error');
-    if(errors.length) throw new Error(errors.map(m=>m.message).join('; '));
-    this.pipeline=await this.device.createRenderPipelineAsync({layout:'auto',vertex:{module,entryPoint:'vs'},fragment:{module,entryPoint:'fs',targets:[{format}]},primitive:{topology:'triangle-list'}});
+  constructor(){
+    this.scene=new THREE.Scene();
+    // Coincide con la focal del video y la proyección usada por los gestos.
+    this.camera=new THREE.PerspectiveCamera(THREE.MathUtils.radToDeg(2*Math.atan(.4)),1,.05,160);
+    this.uniforms={solarBodies:{value:null},solarViewport:{value:new THREE.Vector4(1,1,1280,720)},solarOcclusion:{value:0}};
     this.setBodyDepth(new Float32Array(2),1,1);
-  }
-  setBodyDepth(data,width,height) {
-    if(this.maskWidth!==width || this.maskHeight!==height) {
-      this.texture?.destroy(); this.maskWidth=width; this.maskHeight=height;
-      this.texture=this.device.createTexture({size:[width,height],format:'rg32float',usage:GPUTextureUsage.TEXTURE_BINDING|GPUTextureUsage.COPY_DST});
-      this.bindGroup=this.device.createBindGroup({layout:this.pipeline.getBindGroupLayout(0),entries:[{binding:0,resource:{buffer:this.root.unwrap(this.uniform)}},{binding:1,resource:this.texture.createView()}]});
+    this.scene.add(new THREE.HemisphereLight(0xb8d8ff,0x151824,1.4));
+    this.sunLight=new THREE.PointLight(0xffddaa,100,0,2);this.scene.add(this.sunLight);
+    this.planets=PLANETS.map(([name],index)=>{
+      const texture=surfaceTexture(index);
+      const material=index===0?new THREE.MeshBasicMaterial({map:texture}):new THREE.MeshStandardMaterial({map:texture,roughness:.88,metalness:0});
+      this.applyOcclusion(material);
+      const mesh=new THREE.Mesh(new THREE.SphereGeometry(1,48,32),material);
+      mesh.name=name;mesh.userData.planetIndex=index;this.scene.add(mesh);
+      const outline=new THREE.Mesh(new THREE.SphereGeometry(1.07,24,16),new THREE.MeshBasicMaterial({color:0xffd477,side:THREE.BackSide}));
+      this.applyOcclusion(outline.material);outline.visible=false;mesh.add(outline);
+      return mesh;
+    });
+    this.orbits=new THREE.Group();this.orbits.matrixAutoUpdate=false;this.scene.add(this.orbits);
+    for(const [,radius] of PLANETS.slice(1)){
+      const points=Array.from({length:160},(_,i)=>new THREE.Vector3(Math.cos(i/160*Math.PI*2)*radius,0,Math.sin(i/160*Math.PI*2)*radius));
+      const material=new THREE.LineBasicMaterial({color:0x5cbbdc,transparent:true,opacity:.4});this.applyOcclusion(material);
+      this.orbits.add(new THREE.LineLoop(new THREE.BufferGeometry().setFromPoints(points),material));
     }
-    this.device.queue.writeTexture({texture:this.texture},data,{bytesPerRow:width*8},[width,height]);
+    this.rings=new THREE.Group();this.rings.matrixAutoUpdate=false;this.scene.add(this.rings);
+    for(const [inner,outer,color] of [[1.3,1.6,0x8b775f],[1.65,2,0xe1cba3],[2.03,2.3,0xaaa28a]]){
+      const material=new THREE.MeshStandardMaterial({color,side:THREE.DoubleSide,transparent:true,opacity:.85,roughness:1});this.applyOcclusion(material);
+      const ring=new THREE.Mesh(new THREE.RingGeometry(inner,outer,120),material);ring.rotation.x=-Math.PI/2;this.rings.add(ring);
+    }
+    this.raycaster=new THREE.Raycaster();
+    this.debugScene=new THREE.Scene();
+    this.debugScene.add(new THREE.Mesh(new THREE.PlaneGeometry(2,2),new THREE.ShaderMaterial({
+      uniforms:this.uniforms,transparent:true,depthTest:false,depthWrite:false,
+      vertexShader:'void main(){gl_Position=vec4(position.xy,0.,1.);}',
+      fragmentShader:maskDeclarations+'void main(){float c=texture2D(solarBodies,solarVideoUV()).g;gl_FragColor=vec4(.08,.85,.72,c>.4?.28:0.);}'
+    })));
   }
-  render(values,width,height) {
-    if(this.canvas.width!==width)this.canvas.width=width;
-    if(this.canvas.height!==height)this.canvas.height=height;
-    this.uniform.write(values.map(v=>d.vec4f(...v)));
-    const encoder=this.device.createCommandEncoder();
-    const pass=encoder.beginRenderPass({colorAttachments:[{view:this.context.getCurrentTexture().createView(),loadOp:'clear',storeOp:'store',clearValue:{r:0,g:0,b:0,a:0}}]});
-    pass.setPipeline(this.pipeline); pass.setBindGroup(0,this.bindGroup); pass.draw(3); pass.end();
-    this.device.queue.submit([encoder.finish()]);
+  applyOcclusion(material){
+    material.onBeforeCompile=shader=>{
+      Object.assign(shader.uniforms,this.uniforms);
+      shader.vertexShader='varying float solarDepth;\n'+shader.vertexShader;
+      shader.vertexShader=shader.vertexShader.replace('#include <project_vertex>','#include <project_vertex>\nsolarDepth=-mvPosition.z;');
+      shader.fragmentShader=maskDeclarations+'\n'+shader.fragmentShader;
+      shader.fragmentShader=shader.fragmentShader.replace('void main() {','void main() {\nvec2 body=texture2D(solarBodies,solarVideoUV()).rg;\nif(solarOcclusion>.5 && body.x>0. && body.x<solarDepth && body.y>=.55) discard;');
+    };
+    material.customProgramCacheKey=()=> 'solar-body-depth-v1';
   }
-  destroy(){this.texture?.destroy();this.context?.unconfigure();this.root?.destroy();}
+  async initialize(canvas,onError){
+    this.canvas=canvas;
+    this.contextLost=e=>{e.preventDefault();onError?.('Se perdió la aceleración gráfica. Vuelve al grafo y abre el sistema solar otra vez.');};
+    canvas.addEventListener('webglcontextlost',this.contextLost);
+    this.renderer=new THREE.WebGLRenderer({canvas,alpha:true,antialias:true,powerPreference:'high-performance'});
+    this.renderer.setPixelRatio(1);this.renderer.setClearColor(0x000000,0);
+    this.renderer.outputColorSpace=THREE.SRGBColorSpace;
+    this.renderer.toneMapping=THREE.ACESFilmicToneMapping;this.renderer.toneMappingExposure=1.15;
+  }
+  setBodyDepth(data,width,height){
+    this.bodyTexture?.dispose();
+    const pixels=new Float32Array(width*height*4);
+    for(let i=0;i<width*height;i++){pixels[i*4]=data[i*2];pixels[i*4+1]=data[i*2+1];}
+    this.bodyTexture=new THREE.DataTexture(pixels,width,height,THREE.RGBAFormat,THREE.FloatType);
+    this.bodyTexture.needsUpdate=true;this.uniforms.solarBodies.value=this.bodyTexture;
+  }
+  update(values,width,height,selectedIds=new Set()){
+    this.camera.aspect=width/height;this.camera.updateProjectionMatrix();this.camera.updateMatrixWorld();
+    this.uniforms.solarViewport.value.set(width,height,values[0][2],values[0][3]);
+    this.uniforms.solarOcclusion.value=values[3][1];
+    this.planets.forEach((mesh,i)=>{
+      const [x,y,z,radius]=values[4+i];mesh.position.set(x,y,-z);mesh.scale.setScalar(radius);
+      mesh.visible=z>.05;mesh.rotation.y=values[3][0]*(i===0?.08:.18);
+      mesh.children[0].visible=selectedIds.has(i);
+    });
+    const [x,y,z,scale]=values[1];
+    const [rx,ry,rz]=values[2];
+    const rotation=new THREE.Matrix4().makeRotationFromEuler(new THREE.Euler(rx,ry,rz,'ZYX'));
+    const reflected=new THREE.Matrix4().makeScale(1,1,-1).multiply(rotation);
+    this.orbits.matrix.copy(reflected).scale(new THREE.Vector3(scale,scale,scale)).setPosition(x,y,-z);
+    const saturn=this.planets[6];
+    this.rings.matrix.copy(reflected).scale(new THREE.Vector3(saturn.scale.x,saturn.scale.x,saturn.scale.x)).setPosition(saturn.position);
+    this.rings.visible=saturn.visible;this.sunLight.position.copy(this.planets[0].position);
+    this.sunLight.intensity=100*scale*scale;
+    this.scene.updateMatrixWorld(true);
+  }
+  render(values,width,height,selectedIds){
+    this.update(values,width,height,selectedIds);
+    this.renderer.setSize(width,height,false);this.renderer.render(this.scene,this.camera);
+    if(values[3][2]){this.renderer.autoClear=false;this.renderer.render(this.debugScene,this.camera);this.renderer.autoClear=true;}
+  }
+  pick(point){
+    this.raycaster.setFromCamera(new THREE.Vector2(point.x*2-1,1-point.y*2),this.camera);
+    return this.raycaster.intersectObjects(this.planets,false).find(hit=>hit.object.visible)?.object.userData.planetIndex??null;
+  }
+  destroy(){
+    this.canvas?.removeEventListener('webglcontextlost',this.contextLost);
+    const geometries=new Set(),materials=new Set(),textures=new Set([this.bodyTexture]);
+    for(const scene of [this.scene,this.debugScene])scene.traverse(object=>{
+      if(object.geometry)geometries.add(object.geometry);
+      if(object.material){materials.add(object.material);if(object.material.map)textures.add(object.material.map);}
+    });
+    geometries.forEach(value=>value.dispose());materials.forEach(value=>value.dispose());textures.forEach(value=>value?.dispose());
+    this.renderer?.dispose();
+  }
 }

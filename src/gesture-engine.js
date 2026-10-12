@@ -5,10 +5,11 @@ const WASM_ROOT = "/node_modules/@mediapipe/tasks-vision/wasm";
 const MODEL_PATH = "/public/models/hand_landmarker.task";
 
 export class GestureEngine {
-  constructor({ video, onFrame, onStatus, targetFps = 15 }) {
+  constructor({ video, onFrame, onStatus, targetFps = 15, allowSingleHand = () => false }) {
     this.video = video;
     this.onFrame = onFrame;
     this.onStatus = onStatus;
+    this.allowSingleHand = allowSingleHand;
     this.frameInterval = 1000 / targetFps;
     this.landmarker = null;
     this.active = false;
@@ -82,7 +83,7 @@ export class GestureEngine {
       this.lastVideoTime = this.video.currentTime;
       try {
         const result = this.landmarker.detectForVideo(this.video, timestamp);
-        const {hands,allHands,controlStatus}=this.tracking.update(result.landmarks||[],result.handedness,timestamp);
+        const {hands,allHands,controlStatus,missingOwner,pendingZoom}=this.tracking.update(result.landmarks||[],result.handedness,timestamp,{allowSingleHand:this.allowSingleHand()});
         const primary = hands[0] || { detected: false, pinching: false, threeFingersUp: false, thumbIsCurled: false, openPalm: false, pointing: false, fist: false, point: null, pointerPoint: null, center: null, orientation: null, palmScale: null, landmarks: [] };
         this.previousPoints = hands.map((hand) => hand.point);
         this.previousPointerPoints = hands.map((hand) => hand.pointerPoint);
@@ -92,6 +93,8 @@ export class GestureEngine {
           ...primary,
           allHands,
           controlStatus,
+          missingOwner,
+          pendingZoom,
           detected: hands.length > 0,
           landmarks: primary.landmarks,
           hands

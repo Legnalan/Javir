@@ -8,12 +8,12 @@
     "build:solar": "node scripts/build-solar.mjs",
     "prestart": "npm run build:solar",
     "start": "node server.mjs",
-    "check": "node --check src/main.js && node --check src/gesture-engine.js && node --check src/gesture-math.js && node --check src/solar-demo.js && node --check src/solar-renderer.js && node --check src/solar-math.js && node --check src/body-worker.js && node --check server.mjs",
+    "check": "node --check src/main.js && node --check src/model-swipe.js && node --check src/interaction-audio.js && node --check src/scene-invocation.js && node --check src/graph-three.js && node --check src/map-hand-controls.js && node --check src/gesture-engine.js && node --check src/gesture-math.js && node --check src/car-demo.js && node --check src/car-renderer.js && node --check src/aventador-model.js && node --check src/solar-demo.js && node --check src/solar-renderer.js && node --check src/solar-math.js && node --check src/body-worker.js && node --check server.mjs",
     "test": "node --test test/*.test.mjs"
   },
   "dependencies": {
     "@mediapipe/tasks-vision": "^1.0.1",
-    "typegpu": "^0.12.4"
+    "three": "0.186.1"
   },
   "devDependencies": {
     "esbuild": "^0.28.2"

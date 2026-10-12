@@ -65,6 +65,34 @@ function openHand() {
   return landmarks;
 }
 
+test('V reconoce dos dedos separados y no selecciona, pellizca ni toma el modelo', () => {
+  const landmarks = openHand();
+  landmarks[16].y = .65; landmarks[20].y = .65;
+  const result = analyzeHandLandmarks(landmarks);
+  assert.equal(result.peace, true);
+  for (const pose of ['pointing', 'pinching', 'claw', 'fist', 'openPalm', 'thumbsUp']) assert.equal(result[pose], false);
+});
+
+test('pulgar arriba se distingue de puño, garra y pulgar extendido lateralmente', () => {
+  const landmarks = openHand();
+  for (const [base, tip] of [[5, 8], [9, 12], [13, 16], [17, 20]]) landmarks[tip] = { ...landmarks[base], y: landmarks[base].y + .02 };
+  landmarks[2] = { x: .25, y: .65, z: 0 };
+  landmarks[3] = { x: .25, y: .4, z: 0 };
+  landmarks[4] = { x: .25, y: .1, z: 0 };
+  const result = analyzeHandLandmarks(landmarks);
+  assert.equal(result.thumbsUp, true);
+  for (const pose of ['pointing', 'pinching', 'claw', 'fist', 'openPalm', 'peace']) assert.equal(result[pose], false);
+  landmarks[4] = { x: .05, y: .6, z: 0 };
+  assert.equal(analyzeHandLandmarks(landmarks).thumbsUp, false);
+});
+
+test('V y pulgar arriba no se activan al seleccionar, pellizcar o mostrar palma abierta', () => {
+  for (const landmarks of [pointingHand(), openHand(), pinchingHand({ x: .2, y: .3 }, { x: .22, y: .31 })]) {
+    const result = analyzeHandLandmarks(landmarks);
+    assert.equal(result.peace, false); assert.equal(result.thumbsUp, false);
+  }
+});
+
 test("detecta una pinza y refleja la coordenada horizontal como espejo", () => {
   const result = analyzeHandLandmarks(pinchingHand({ x: 0.2, y: 0.3 }, { x: 0.22, y: 0.31 }));
   assert.equal(result.detected, true);
@@ -83,6 +111,47 @@ test("detecta el índice extendido sin confundirlo con una pinza", () => {
   assert.equal(result.pointing, true);
   assert.equal(result.pinching, false);
   assert.equal(result.pointerPoint.x, 0.5);
+});
+
+test("garra: dedos parcialmente doblados toman el modelo sin ser puño ni pinza", () => {
+  const landmarks = openHand();
+  for (const [base, joint, tip] of [[5, 6, 8], [9, 10, 12], [13, 14, 16], [17, 18, 20]]) {
+    landmarks[joint] = { x: landmarks[base].x, y: .28, z: 0 };
+    landmarks[tip] = { x: landmarks[base].x + .12, y: .4, z: -.04 };
+  }
+  const result = analyzeHandLandmarks(landmarks);
+  assert.equal(result.claw, true);
+  for (const gesture of ['fist', 'pinching', 'pointing', 'openPalm']) assert.equal(result[gesture], false);
+});
+
+test("garra: no se activa con palma abierta, índice, pellizco ni puño cerrado", () => {
+  for (const landmarks of [openHand(), pointingHand(), pinchingHand({ x: .2, y: .3 }, { x: .22, y: .31 }), handWithTips({ x: .35, y: .65 }, { x: .5, y: .55 })]) {
+    assert.equal(analyzeHandLandmarks(landmarks).claw, false);
+  }
+});
+
+test("garra de frente: reconoce dedos doblados hacia la palma con proyección casi alineada", () => {
+  const landmarks = openHand();
+  for (const [base, joint, tip] of [[5, 6, 8], [9, 10, 12], [13, 14, 16], [17, 18, 20]]) {
+    landmarks[joint] = { x: landmarks[base].x, y: .25, z: 0 };
+    landmarks[tip] = { x: landmarks[base].x + .02, y: .38, z: -.02 };
+  }
+  const result = analyzeHandLandmarks(landmarks);
+  assert.equal(result.claw, true);
+  assert.equal(result.fist, false);
+  assert.equal(result.pinching, false);
+  assert.equal(analyzeHandLandmarks(openHand(), { wasClaw: true }).claw, false);
+});
+
+test("garra: un puño apretado con las puntas junto a los nudillos libera la toma", () => {
+  const landmarks = openHand();
+  for (const [base, joint, tip] of [[5, 6, 8], [9, 10, 12], [13, 14, 16], [17, 18, 20]]) {
+    landmarks[joint] = { x: landmarks[base].x, y: .3, z: 0 };
+    landmarks[tip] = { ...landmarks[base], y: landmarks[base].y + .02 };
+  }
+  landmarks[4] = { x: .5, y: .55, z: 0 };
+  assert.equal(analyzeHandLandmarks(landmarks, { wasClaw: true }).claw, false);
+  assert.equal(analyzeHandLandmarks(landmarks).fist, true);
 });
 
 test("detecta un puño cerrado como gesto distinto de la mano abierta", () => {
@@ -136,11 +205,12 @@ test("mantiene histéresis y libera la pinza cuando los dedos se separan", () =>
   assert.equal(released.pinching, false);
 });
 
-test("no confunde una pinza sin los tres dedos arriba con un puño válido", () => {
+test("pellizco acepta los otros tres dedos recogidos y no activa el puño", () => {
   const result = analyzeHandLandmarks(handWithTips({ x: 0.35, y: 0.65 }, { x: 0.36, y: 0.64 }));
-  assert.equal(result.pinching, false);
+  assert.equal(result.pinching, true);
   assert.equal(result.threeFingersUp, false);
-  assert.equal(result.fist, true);
+  assert.equal(result.fist, false);
+  assert.equal(result.claw, false);
 });
 
 test("no activa el puño si el pulgar permanece fuera de la palma", () => {
@@ -211,4 +281,11 @@ test("detecta un barrido horizontal corto, de una sola dirección", () => {
   assert.equal(detectHorizontalSwipe([{ x: 0.2, y: 0.5, time: 0 }, { x: 0.42, y: 0.5, time: 800 }]), null);
   assert.equal(detectHorizontalSwipe([{ x: 0.2, y: 0.5, time: 0 }, { x: 0.36, y: 0.5, time: 120 }, { x: 0.24, y: 0.5, time: 240 }, { x: 0.5, y: 0.5, time: 360 }]), null);
   assert.equal(detectHorizontalSwipe([{ x: 0.2, y: 0.2, time: 0 }, { x: 0.32, y: 0.38, time: 140 }, { x: 0.45, y: 0.4, time: 280 }]), null);
+});
+test('barrido: dedos juntos vistos de canto se reconocen en 3D sin confundirse con puño',()=>{
+ const landmarks=Array.from({length:21},()=>({x:.5,y:.5,z:0}));landmarks[0]={x:.5,y:.8,z:0};landmarks[4]={x:.64,y:.65,z:0};
+ for(const [i,base]of [5,9,13,17].entries()){
+ landmarks[base]={x:.5+i*.004,y:.5,z:0};landmarks[base+1]={x:.5+i*.004,y:.5,z:-.15};landmarks[base+2]={x:.5+i*.004,y:.5,z:-.25};landmarks[base+3]={x:.5+i*.004,y:.5,z:-.4};
+ }
+ const sample=analyzeHandLandmarks(landmarks);assert.equal(sample.openPalm,false);assert.equal(sample.swipePalm,true);assert.equal(sample.fist,false);assert.equal(sample.claw,false);
 });

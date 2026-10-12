@@ -2,26 +2,27 @@
 
 ## Qué está implementado
 
-Un modo alternativo al grafo de código: Sol y ocho planetas, órbitas animadas, anillos de Saturno, perspectiva e iluminación. Son esferas analíticas intersectadas por rayos, no tarjetas giradas. TypeGPU 0.12.4 administra el dispositivo y el buffer uniforme tipado; un shader WGSL interoperable con WebGPU dibuja la escena. Las proporciones y velocidades son ilustrativas.
+Un modo alternativo al grafo de código: Sol y ocho planetas, órbitas animadas, anillos de Saturno, perspectiva e iluminación. Three.js renderiza mallas esféricas con texturas locales ilustrativas, materiales iluminados desde el Sol, anillos con geometría y órbitas en un mismo espacio tridimensional. WebGL comparte la profundidad de los objetos y conserva la máscara corporal estimada. Las proporciones y velocidades son ilustrativas.
 
 Se muestra sobre el video en la pantalla: una webcam no proyecta luz físicamente sobre la mesa.
 
 ## Probarlo
 
 1. Ejecuta `npm install` y `npm start`. El arranque compila los dos módulos de la maqueta con esbuild. Después de editar esos módulos ejecuta `npm run build:solar` y recarga.
-2. Abre http://localhost:4173 en Brave o Chrome con WebGPU disponible. Pulsa **Sistema solar** y **Cámara y gestos**.
-3. Apunta la cámara hacia una mesa y mantenla fija. Pulsa **Colocar en mesa** y haz clic en su centro, o mantén el índice en ese punto durante un segundo.
-4. Abre **Ajustar superficie y cuerpos**: ajusta inclinación, distancia y tamaño para alinear la maqueta con la mesa.
-5. Activa **Mostrar siluetas detectadas**. Comprueba que cubren a las personas, luego desactívalo.
-6. De frente o de perfil, la maqueta permanece delante de tu cuerpo. Dar la espalda durante unos 450 ms habilita la oclusión para esa persona; se conserva la comparación de distancia estimada. **Ocultar planetas solo al dar la espalda** puede desmarcarse para mantener la maqueta siempre delante. Prueba primero con una persona y después con dos.
-7. **Volver al grafo** libera el renderizador y el detector corporal. La escena del repositorio conserva sus datos. La cámara y el seguimiento de manos pueden seguir activos; apágalos desde Controles.
+2. Abre http://localhost:4173 en Brave o Chrome con aceleración gráfica WebGL disponible. Pulsa **Sistema solar** y **Cámara y gestos**.
+3. Antes de ver los planetas, muestra una palma abierta con los cinco dedos extendidos y mantenla quieta un segundo. Confirma el aro de progreso; cambia de postura para manipular la maqueta. Al volver con el botón, vuelve a invocar el grafo. Barre lateralmente con la palma abierta para cambiar de modelo con carrusel. Recoge los dedos antes de otro barrido. La garra solo desplaza la maqueta.
+4. Apunta la cámara hacia una mesa y mantenla fija. Pulsa **Colocar en mesa** y haz clic en su centro, o mantén el índice en ese punto durante un segundo.
+5. Abre **Ajustar superficie y cuerpos**: ajusta inclinación, distancia y tamaño para alinear la maqueta con la mesa.
+6. Activa **Mostrar siluetas detectadas**. Comprueba que cubren a las personas, luego desactívalo.
+7. De frente o de perfil, la maqueta permanece delante de tu cuerpo. Dar la espalda durante unos 450 ms habilita la oclusión para esa persona; se conserva la comparación de distancia estimada. **Ocultar planetas solo al dar la espalda** puede desmarcarse para mantener la maqueta siempre delante. Prueba primero con una persona y después con dos.
+8. **Volver al grafo** libera el renderizador y el detector corporal. La escena del repositorio conserva sus datos. La cámara y el seguimiento de manos pueden seguir activos; apágalos desde Controles.
 
 ## Gestos y alternativa manual
 
-- Un puño y la otra palma abierta fija: breve calibración de 350 ms; el puño gira en tres ejes y desplaza la maqueta. Si se mueve la palma, se recalibra. Un puño solo no activa giro.
-- Dos palmas abiertas: desplazar.
-- Dos pinzas que comienzan juntas: zoom general; dos pinzas separadas: tomar dos planetas diferentes.
-- Índice: seleccionar; pinza estricta (índice y pulgar juntos, tres dedos arriba) sobre el planeta: arrastrar. Se toma el planeta bajo la pinza.
+- Índice: selecciona un planeta.
+- Pellizco de índice y pulgar: mueve únicamente el planeta previamente seleccionado. Dos pellizcos hacen zoom del sistema completo: separa para acercar y junta para alejar, sin cambiar posiciones individuales. Abre ambos antes de volver al arrastre de un planeta.
+- Garra con los dedos parcialmente cerrados: desplaza todo el sistema solar; abre la mano para soltar.
+- Puedes empezar con una sola mano, directamente con índice o garra.
 - Índice sobre Controles: abre el menú del workspace.
 - Ratón: arrastrar planeta o fondo, Shift + arrastrar para girar, rueda para zoom. Pausar órbitas facilita la selección de los planetas pequeños.
 
@@ -43,7 +44,14 @@ La estimación puede fallar con niños, personas de perfil, hombros ocultos, poc
 - Siguiente fase: adaptador de superficie/profundidad con capacidades explícitas; WebXR hit-test y depth-sensing cuando el dispositivo los ofrezca, o marcador visual calibrado para webcam. Después, estudiar profundidad monocular y seguimiento visual con una prueba de estabilidad antes de activar colocación automática.
 - La segmentación corporal está integrada en el modo solar, no en el grafo de arquitectura.
 
-## Verificación de esta entrega
+## Migración a Three.js · 2026-10-05
+
+- Mallas esféricas, ocho órbitas, anillos de Saturno, texturas locales ilustrativas y luz desde el Sol.
+- La proyección coincide con las coordenadas de selección y arrastre; la máscara corporal conserva el espejo y recorte del video.
+- Pruebas del modelo, proyección con giro y escala, selección por raycast y los gestos existentes.
+- La validación física de gestos y oclusión sigue pendiente para este renderizador.
+
+## Verificación histórica del renderizador anterior
 
 - Pruebas unitarias de órbitas, proyección, recorte y espejo del video, estimación corporal y comparación de profundidad.
 - Brave automatizado con WebGPU: shader compilado y renderizado sin errores de aplicación; giro combinado, bloqueo de puño aislado, pausa por deriva de palma y zoom probados con entradas sintéticas.
@@ -54,7 +62,6 @@ La estimación puede fallar con niños, personas de perfil, hombros ocultos, poc
 
 ## Fuentes
 
-- TypeGPU: https://github.com/software-mansion/TypeGPU
-- Interoperabilidad oficial: https://docs.swmansion.com/TypeGPU/integration/webgpu-interoperability/
+- Three.js: https://threejs.org/docs/
 - Poses y máscaras en web: https://developers.google.com/edge/mediapipe/solutions/vision/pose_landmarker/web_js
 - Imagen de prueba oficial: https://developers.google.com/static/mediapipe/images/solutions/examples/pose_detector.png

@@ -7,11 +7,14 @@ import {
   serializeScene,
   validScene
 } from "./scene-model.js";
+import { InteractionAudio } from "./interaction-audio.js";
+import { ModelSwipe } from "./model-swipe.js";
+import { SceneInvocation } from "./scene-invocation.js";
+import { MapHandControls } from "./map-hand-controls.js";
 import { GestureEngine } from "./gesture-engine.js";
 import {
   HAND_CONNECTIONS,
   calculateGestureZoom,
-  classifyTwoHandGesture,
   clampScenePosition,
   detectHorizontalSwipe,
   distance2D,
@@ -24,7 +27,6 @@ import {
 
 const STORAGE_KEY = "javir-scene-v1";
 const runtimeConfig = { defaultRepository: "" };
-const TWO_HAND_ZOOM_MAX_DISTANCE = 0.28;
 const ROTATION_ANCHOR_STEP_LIMIT = 0.022;
 const ROTATION_ANCHOR_DRIFT_LIMIT = 0.055;
 const ROTATION_STABLE_FRAMES = 6;
@@ -130,12 +132,21 @@ const elements = {
   sceneEmpty: document.querySelector("#scene-empty")
 };
 
+const interactionAudio = new InteractionAudio();
+const sceneInvocation = new SceneInvocation();
+const modelSwipe = new ModelSwipe();
+let sceneSwitching = false;
+let modelGlideFrame = null;
 let scene = loadScene();
 let selectedId = scene.objects[0]?.id || null;
+let selectedIds = new Set(selectedId ? [selectedId] : []);
 let history = [];
 let zoom = 100;
 let cameraStream = null;
 let solarDemo = null;
+const sceneDemos = new Map();
+let graphView = null;
+let mapHandControls = null;
 let cameraRequestVersion = 0;
 let gestureEngine = null;
 let gestureMoveState = null;
@@ -176,7 +187,7 @@ function setManualMenuOpen(open, { focus = false } = {}) {
   if (!elements.manualMenu || !elements.menuAnchor) return;
   const nextOpen = Boolean(open);
   if (nextOpen && !elements.manualMenu.hidden) return;
-  if (nextOpen) manualMenuLastFocus = document.activeElement;
+  if (nextOpen) { manualMenuLastFocus = document.activeElement; interactionAudio.play("menu"); }
   elements.manualMenu.hidden = !nextOpen;
   elements.manualMenu.setAttribute("aria-hidden", String(!nextOpen));
   elements.menuAnchor.setAttribute("aria-expanded", String(nextOpen));
@@ -300,6 +311,7 @@ function renderEdges() {
 }
 
 function updateVisualPositions() {
+  if (graphView) { updateSceneRotation(); return; }
   scene.objects.forEach((object) => {
     const node = elements.nodes.querySelector(`[data-id="${CSS.escape(object.id)}"]`);
     if (!node) return;
@@ -312,6 +324,11 @@ function updateVisualPositions() {
 }
 
 function updateSceneRotation() {
+  if (graphView) {
+    graphView.sync(scene, selectedId, sceneSpatialTransform, sceneRotation, zoom, selectedIds);
+    updateSpatialDepthReadout();
+    return;
+  }
   const camera = elements.sceneCamera || elements.sceneStage;
   if (!camera || !elements.sceneStage) return;
   camera.style.setProperty("--scene-rotate-x", `${sceneRotation.x}deg`);
@@ -354,7 +371,7 @@ function renderNodes() {
   elements.nodes.classList.toggle("is-dense", scene.objects.length > 10);
   elements.nodes.innerHTML = scene.objects.map((object) => {
     const metadata = getMetadata(object);
-    const selected = object.id === selectedId;
+    const selected = selectedIds.has(object.id);
     return `<span class="scene-node-anchor" style="--x:${object.x}%;--y:${object.y}%;--node-z:${getSceneDepth(object)}px">
       <button class="scene-node${selected ? " is-selected" : ""}" type="button" data-id="${escapeHTML(object.id)}" aria-pressed="${selected}" aria-label="${escapeHTML(`${object.title}, ${metadata.label}`)}" style="--node-color:var(--color-hologram-bright);--node-type-color:var(--color-${metadata.color})">
         <span class="node-topline"><span class="node-kind">${escapeHTML(metadata.label)}</span><span class="node-status" aria-hidden="true"></span></span>
@@ -384,6 +401,7 @@ function renderNodes() {
       }
     });
   });
+  if (graphView) updateSceneRotation();
 }
 
 function renderInspector() {
@@ -394,6 +412,7 @@ function renderInspector() {
   }
 
   const metadata = getMetadata(object);
+  const selectionSummary = selectedIds.size > 1 ? `<p class="inspector-description" role="status">${selectedIds.size} objetos seleccionados: ${[...selectedIds].map(id => escapeHTML(findObject(scene, id)?.title || id)).join(" · ")}</p>` : "";
   const incoming = scene.relations.filter((relation) => relation.to === object.id).map((relation) => ({ relation, object: findObject(scene, relation.from) })).filter((entry) => entry.object);
   const outgoing = scene.relations.filter((relation) => relation.from === object.id).map((relation) => ({ relation, object: findObject(scene, relation.to) })).filter((entry) => entry.object);
   const relationMarkup = [...incoming.map(({ relation, object: related }) => `<div class="relation-row"><span>← <strong>${escapeHTML(related.title)}</strong></span><span>${escapeHTML(relation.label)}</span></div>`), ...outgoing.map(({ relation, object: related }) => `<div class="relation-row"><span>→ <strong>${escapeHTML(related.title)}</strong></span><span>${escapeHTML(relation.label)}</span></div>`)].join("");
@@ -401,7 +420,7 @@ function renderInspector() {
   const analysisMarkup = scene.analysis ? `<section class="inspector-block"><span class="inspector-label">Análisis local</span><p class="inspector-description">${escapeHTML(scene.analysis.fileCount)} archivos revisados · ${escapeHTML(scene.analysis.excludedCount)} excluidos · ${escapeHTML(scene.analysis.samples?.length || 0)} muestras.</p><p class="inspector-description">${escapeHTML(scene.analysis.symbolCount || 0)} símbolos · ${escapeHTML(scene.analysis.importCount || 0)} imports observados · ${scene.analysis.truncated ? "Límite alcanzado." : "Límite no alcanzado."}</p><ul class="source-list">${scene.analysis.excludedPaths?.slice(0, 4).map((entry) => `<li><code>${escapeHTML(entry.path)} · ${escapeHTML(entry.reason)}</code></li>`).join("") || "<li><code>Sin exclusiones registradas</code></li>"}</ul></section>` : "";
   const structureMarkup = object.symbols?.length || object.imports?.length ? `<section class="inspector-block"><span class="inspector-label">Estructura observada</span>${object.symbols?.length ? `<p class="inspector-description">${object.symbols.length} símbolos detectados</p><ul class="source-list compact-list">${object.symbols.slice(0, 8).map((symbol) => `<li><code>${escapeHTML(symbol.name)} · ${escapeHTML(symbol.source)}</code></li>`).join("")}</ul>` : ""}${object.imports?.length ? `<p class="inspector-description structure-subheading">${object.imports.length} imports locales detectados</p>` : ""}</section>` : "";
 
-  elements.inspectorContent.innerHTML = `<div class="inspector-body">
+  elements.inspectorContent.innerHTML = `<div class="inspector-body">${selectionSummary}
     <section class="selected-object-card" style="--node-color:var(--color-${metadata.color})">
       <div class="selected-object-title"><span class="object-symbol">${icon(typeIcons[object.type] || "node")}</span><div><h3>${escapeHTML(object.title)}</h3><p>${escapeHTML(object.subtitle)}</p></div></div>
       <div class="inspector-tag-row"><span class="inspector-tag">${escapeHTML(metadata.label)}</span><span class="inspector-tag">ID: ${escapeHTML(object.id)}</span></div>
@@ -439,16 +458,29 @@ function statusLabel(status) {
 }
 
 function render() {
+  selectedIds = new Set([...selectedIds].filter(id => findObject(scene, id)));
+  if (selectedId && !selectedIds.has(selectedId)) selectedIds = new Set([selectedId]);
   updateSceneSummary();
   renderNodes();
   renderInspector();
   updateSceneRotation();
-  elements.zoomReadout.textContent = `${zoom}%`;
+  elements.zoomReadout.textContent = `${graphView ? graphView.zoomPercent(zoom) : zoom}%`;
+}
+
+function selectObjects(ids) {
+  const validIds = [...new Set(ids)].filter(id => findObject(scene, id));
+  if (!validIds.length) return;
+  const changed = validIds.length !== selectedIds.size || validIds.some(id => !selectedIds.has(id));
+  selectedIds = new Set(validIds);
+  if (!selectedIds.has(selectedId)) selectedId = validIds[0];
+  if (changed) { interactionAudio.play("select"); renderNodes(); renderInspector(); }
 }
 
 function selectObject(id, { focus = true } = {}) {
   if (!findObject(scene, id)) return;
+  if (selectedId !== id || selectedIds.size !== 1) interactionAudio.play("select");
   selectedId = id;
+  selectedIds = new Set([id]);
   renderNodes();
   renderInspector();
   elements.inspector.classList.add("is-open");
@@ -527,12 +559,13 @@ function openAnalysisDialog() {
 function startNewSession() {
   const shouldReset = scene.objects.length <= initialScene.objects.length || window.confirm("¿Crear una nueva escena y descartar los cambios no guardados?");
   if (!shouldReset) return;
+  resetSceneInvocation();
   commit((draft) => Object.assign(draft, cloneScene(initialScene)), "Nueva sesión creada", "billing");
   elements.sceneFootnote.textContent = "Fuente: escena de demostración · relaciones verificables pendientes";
 }
 
 function showHelp() {
-  showToast("Gestos: índice selecciona; pinza = índice y pulgar juntos con los otros tres dedos arriba para mover una card; dos manos abiertas hacen paneo; puño + palma abierta fija orbitan y desplazan el diagrama; barrido lateral retira.");
+  showToast("Invoca con la palma abierta durante un segundo. Toma el modelo con garra y arrástralo hacia un extremo para alternar diagrama y sistema solar. Después, índice selecciona; pellizco mueve selección; garra desplaza todo; puño gira; dos pellizcos hacen zoom; V estable 0.75 s enfoca; pulgar arriba 1.1 s recentra. Abre la mano para soltar.");
   elements.commandInput.focus();
 }
 
@@ -682,9 +715,21 @@ function openGestureDetail() {
 }
 
 function setGestureUi(mode, status, hint) {
+  if (!solarDemo?.active) {
+    const motion = mapHandControls?.motion?.key;
+    interactionAudio.motion(gestureMoveState || sceneSpatialState?.active ? "grab" :
+      gestureTwoHandState || motion?.includes("zoom") ? "zoom" : motion?.startsWith("orbit") ? "orbit" : null);
+  }
+  if (mode === "error") interactionAudio.play("error");
   elements.gestureOverlay.dataset.state = mode;
   elements.gestureStatus.textContent = status;
   elements.gestureHint.textContent = hint;
+  const invocationStart = document.querySelector("#invocation-start");
+  invocationStart.disabled = mode === "loading" || Boolean(gestureEngine?.active);
+  invocationStart.textContent = mode === "loading" ? "Preparando cámara y gestos…" : gestureEngine?.active ? "Gestos activos" : "Activar cámara y gestos";
+  if (!sceneInvocation.visible && (mode === "error" || mode === "loading" || mode === "idle")) {
+    document.querySelector("#invocation-message").textContent = mode === "error" ? hint : mode === "loading" ? status : "Activa Gestos y muestra tu palma abierta durante un segundo";
+  }
   const active = Boolean(gestureEngine?.active);
   elements.gestureToggle.classList.toggle("is-on", active);
   elements.gestureToggle.setAttribute("aria-pressed", String(active));
@@ -711,23 +756,13 @@ function clampSceneSpatialTransform(transform) {
 }
 
 function spatialGripPose(hands) {
-  if (!Array.isArray(hands) || hands.length < 2) return null;
-  const gripHands = hands.slice(0, 2)
-    .filter((hand) => hand?.openPalm && hand.center && Number.isFinite(hand.palmScale) && hand.orientation)
-    .sort((first, second) => first.center.x - second.center.x);
-  if (gripHands.length !== 2) return null;
-
-  const [left, right] = gripHands;
-  const vector = { x: right.center.x - left.center.x, y: right.center.y - left.center.y };
-  const span = Math.hypot(vector.x, vector.y);
-  if (span < 0.14 || span > 0.78) return null;
+  const hand = hands.find(hand => hand.claw && hand.center && Number.isFinite(hand.palmScale));
+  if (!hand) return null;
   return {
-    midpoint: { x: (left.center.x + right.center.x) / 2, y: (left.center.y + right.center.y) / 2 },
-    vector,
-    span,
-    angle: Math.atan2(vector.y, vector.x),
-    palmScale: (left.palmScale + right.palmScale) / 2,
-    scaleDifference: right.palmScale - left.palmScale
+    handIndex: hand.handIndex,
+    midpoint: { ...hand.center },
+    vector: { x: 0, y: 0 }, span: 0, angle: 0,
+    palmScale: hand.palmScale, scaleDifference: 0
   };
 }
 
@@ -766,19 +801,22 @@ function calibrateSceneSpatialState(state, pose) {
 function updateSceneSpatialManipulator(hands) {
   const pose = spatialGripPose(hands);
   if (!pose) return { candidate: false, active: false, waiting: false };
+  if (sceneSpatialState && sceneSpatialState.handIndex !== pose.handIndex) finalizeSceneSpatialManipulation(false);
 
   if (!sceneSpatialState) {
     sceneSpatialState = {
+      handIndex: pose.handIndex,
       original: cloneScene(scene),
       originalRotation: { ...sceneRotation },
       originalSpatial: { ...sceneSpatialTransform },
       stableFrames: 1,
-      active: false,
+      active: true,
       moved: false,
       lastPose: pose,
       calibrationVersion: spatialCalibrationVersion
     };
-    return { candidate: true, active: false, waiting: true, depth: 0 };
+    calibrateSceneSpatialState(sceneSpatialState, pose);
+    return { candidate: true, active: true, waiting: false, depth: sceneSpatialTransform.z };
   }
 
   if (sceneSpatialState.calibrationVersion !== spatialCalibrationVersion) {
@@ -1032,7 +1070,7 @@ function finalizeTwoHandGesture(announce = false) {
 function startGestureMultiMove(hands) {
   const entries = hands.slice(0, 2).map((hand) => {
     const selectedObject = gestureSelectionIds[hand.handIndex] ? findObject(scene, gestureSelectionIds[hand.handIndex]) : null;
-    const object = findGestureTarget(hand.point) || selectedObject;
+    const object = selectedObject;
     if (!object || !hand.point) return null;
     return {
       handIndex: hand.handIndex,
@@ -1059,10 +1097,7 @@ function updateGestureMultiMove(hands) {
     const hand = hands.find((candidate) => candidate.handIndex === entry.handIndex);
     const object = findObject(scene, entry.objectId);
     if (!hand?.point || !object) return;
-    const nextPosition = clampScenePosition({
-      x: entry.startX + (hand.point.x - entry.startPoint.x) * 100,
-      y: entry.startY + (hand.point.y - entry.startPoint.y) * 100
-    });
+    const nextPosition = objectDragPosition(object, entry.startPoint, hand.point, entry.startX, entry.startY);
     const movedDistance = Math.hypot(nextPosition.x - object.x, nextPosition.y - object.y);
     object.x = nextPosition.x;
     object.y = nextPosition.y;
@@ -1332,14 +1367,221 @@ function setGestureHoverTarget(id) {
   if (id) elements.nodes.querySelector(`[data-id="${CSS.escape(id)}"]`)?.classList.add("is-gesture-target");
 }
 
+function resetSceneInvocation() {
+  stopModelGlide();
+  modelSwipe.reset();
+  interactionAudio.stop();
+  finalizeGestureMove(false);
+  finalizeSceneSpatialManipulation(false);
+  finalizeTwoHandGesture();
+  finalizeGestureRotation(false);
+  resetGestureDismiss();
+  solarDemo?.handleHands([]);
+  sceneInvocation.reset();
+  elements.viewport.classList.add("scene-awaiting-invocation");
+  elements.viewport.classList.remove("scene-invoked");
+  elements.sceneStage.inert = true;
+  document.querySelector("#invocation-ring").hidden = true;
+  document.querySelector("#invocation-prompt").hidden = false;
+  document.querySelector("#invocation-message").textContent = gestureEngine?.active ? "Muestra tu palma abierta durante un segundo" : "Activa Gestos y muestra tu palma abierta durante un segundo";
+  graphView?.setEnabled(false);
+  mapHandControls?.reset();
+  gestureSelectionId = null;
+  gestureSelectionIds = [null, null];
+  setGestureDetailTarget(null);
+  setGestureHoverTarget(null);
+}
+
+function handleSceneInvocation(hands) {
+  const state = sceneInvocation.update(hands, performance.now());
+  interactionAudio.charge(state.progress, Boolean(state.center) && !state.visible);
+  const ring = document.querySelector("#invocation-ring");
+  ring.hidden = !state.center || state.visible;
+  if (state.center && !state.visible) {
+    ring.style.left = `${state.center.x * 100}%`;
+    ring.style.top = `${state.center.y * 100}%`;
+    ring.style.setProperty("--invocation-progress", `${state.progress * 360}deg`);
+  }
+  if (state.revealed) {
+    interactionAudio.play("reveal");
+    elements.viewport.classList.remove("scene-awaiting-invocation");
+    elements.viewport.classList.add("scene-invoked");
+    elements.sceneStage.inert = false;
+    // El bloqueo gestual permanece hasta que la mano invocadora cambie de postura.
+    graphView?.setEnabled(!solarDemo?.active);
+  }
+  document.querySelector("#invocation-prompt").hidden = state.visible;
+  if (state.blocked) {
+    const message = state.visible ? "Escena invocada · cambia de postura para continuar" : state.center
+      ? `Invocando ${solarDemo?.active ? (solarDemo.kind === "car" ? "deportivo" : "sistema solar") : "diagrama"} · ${Math.round(state.progress * 100)}%`
+      : "Muestra tu palma abierta durante un segundo";
+    document.querySelector("#invocation-message").textContent = message;
+    setGestureUi("searching", message, "Cinco dedos extendidos; mantén la palma quieta frente a la cámara.");
+    solarDemo?.status(message);
+    mapHandControls?.reset();
+    return true;
+  }
+  return false;
+}
+
+function stopModelGlide() {
+  if (modelGlideFrame !== null) cancelAnimationFrame(modelGlideFrame);
+  modelGlideFrame = null;
+}
+
+function startModelGlide({ vx, vy }) {
+  stopModelGlide();
+  if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+  const solar = Boolean(solarDemo?.active);
+  finalizeSceneSpatialManipulation(false);
+  solarDemo?.handleHands([]);
+  // Velocidad acotada y fricción: suelta el modelo sin sacarlo del encuadre.
+  vx = Math.max(-1.2, Math.min(1.2, vx));
+  vy = Math.max(-1.2, Math.min(1.2, vy));
+  if (Math.hypot(vx, vy) < .06) return;
+  let previous = performance.now();
+  const began = previous;
+  const step = now => {
+    const dt = Math.min((now - previous) / 1000, .05);
+    previous = now;
+    const decay = Math.exp(-7 * dt), dx = vx * (1 - decay) / 7, dy = vy * (1 - decay) / 7;
+    vx *= decay; vy *= decay;
+    if (solar && solarDemo?.active) {
+      const a = solarDemo.screenPoint({ x: .5 + dx, y: .5 + dy }), b = solarDemo.screenPoint({ x: .5, y: .5 });
+      solarDemo.anchor.x = Math.max(.08, Math.min(.92, solarDemo.anchor.x + a.x - b.x));
+      solarDemo.anchor.y = Math.max(.08, Math.min(.92, solarDemo.anchor.y + a.y - b.y));
+    } else if (!solar && !solarDemo?.active) {
+      const rect = elements.viewport.getBoundingClientRect();
+      sceneSpatialTransform = clampSceneSpatialTransform({ ...sceneSpatialTransform,
+        x: sceneSpatialTransform.x + dx * rect.width, y: sceneSpatialTransform.y + dy * rect.height });
+      updateSceneRotation();
+    } else { stopModelGlide(); return; }
+    if (now - began < 650 && Math.hypot(vx, vy) > .025) modelGlideFrame = requestAnimationFrame(step);
+    else modelGlideFrame = null;
+  };
+  modelGlideFrame = requestAnimationFrame(step);
+}
+
+function handleModelSwipe(hands) {
+  if (!elements.manualMenu.hidden || !sceneInvocation.visible || solarDemo?.placing) { modelSwipe.stroke = null; return false; }
+  if (hands.some(hand => hand.claw || hand.pinching || hand.pointing || hand.fist || hand.peace || hand.thumbsUp)) stopModelGlide();
+  const direction = modelSwipe.update(hands, performance.now());
+  if (!direction && modelSwipe.released) startModelGlide(modelSwipe.released);
+  if (!direction) {
+    if (modelSwipe.latched && hands.some(hand => hand.openPalm || hand.swipePalm)) {
+      setGestureUi("detected", "Modelo cambiado", "Recoge los dedos y vuelve a abrir la palma para hacer otro barrido.");
+      solarDemo?.status("Modelo cambiado. Recoge los dedos antes de otro barrido.");
+      return true;
+    }
+    return false;
+  }
+  const modes = ["graph", "solar", "car"];
+  const current = solarDemo?.active ? solarDemo.kind || "solar" : "graph";
+  void switchSceneModel(modes[(modes.indexOf(current) + (direction > 0 ? 1 : 2)) % 3], { invoked: true, direction });
+  return true;
+}
+
+async function animateModelChange(direction, entering = false) {
+  if (!direction || window.matchMedia("(prefers-reduced-motion: reduce)").matches) return [];
+  const layers = solarDemo?.active ? [solarDemo.canvas, solarDemo.labels] : [graphView?.canvas, elements.sceneStage];
+  const frames = entering
+    ? [{ translate: `${-direction * 100}% 0`, opacity: 0 }, { translate: "0% 0", opacity: 1 }]
+    : [{ translate: "0% 0", opacity: 1 }, { translate: `${direction * 100}% 0`, opacity: 0 }];
+  const animations = layers.filter(Boolean).map(layer => layer.animate(frames, {
+    duration: entering ? 260 : 180, easing: "cubic-bezier(.22,.7,.25,1)", fill: "forwards"
+  }));
+  await Promise.all(animations.map(animation => animation.finished.catch(() => {})));
+  return animations;
+}
+
+async function switchSceneModel(solar, { invoked = false, direction = 0 } = {}) {
+  if (sceneSwitching) return;
+  const mode = typeof solar === "boolean" ? (solar ? "solar" : "graph") : solar;
+  solar = mode !== "graph";
+  stopModelGlide();
+  sceneSwitching = true;
+  const button = document.querySelector("#solar-launcher");
+  button.disabled = true;
+  let animations = [];
+  const originalSpatial = direction && !solarDemo?.active ? sceneSpatialState?.originalSpatial : null;
+  const originalAnchor = direction && solarDemo?.active ? solarDemo.gesture?.originalAnchor : null;
+  try {
+    finalizeGestureMove(); finalizeSceneSpatialManipulation(); finalizeTwoHandGesture(); finalizeGestureRotation();
+    mapHandControls?.reset();
+    gestureSelectionId = null; gestureSelectionIds = [null, null];
+    setGestureDetailTarget(null); setGestureHoverTarget(null); clearManualMenuGestureTarget();
+    solarDemo?.handleHands([]);
+    interactionAudio.stop();
+    setManualMenuOpen(false);
+    animations = await animateModelChange(direction);
+    // El tramo que cambia de página no deja el modelo estacionado fuera del centro.
+    if (originalSpatial) { sceneSpatialTransform = { ...originalSpatial }; updateSceneRotation(); }
+    if (originalAnchor) solarDemo.anchor = { ...originalAnchor };
+    if (solar) {
+      const { SolarDemo } = await import('/public/generated/solar-demo.js');
+      const { CarDemo } = mode === "car" ? await import('/public/generated/car-demo.js') : { CarDemo: null };
+      if (solarDemo?.active) solarDemo.close();
+      solarDemo = sceneDemos.get(mode) || new (mode === "car" ? CarDemo : SolarDemo)({ viewport: elements.viewport, video: elements.cameraPreview,
+        onCamera: startGestureControl, onSound: cue => interactionAudio.play(cue), onMotion: kind => interactionAudio.motion(kind),
+        onClaim: () => gestureEngine?.tracking.release(),
+        onReveal: () => {
+          sceneInvocation.visible = true; sceneInvocation.awaitingRelease = false;
+          elements.viewport.classList.remove("scene-awaiting-invocation");
+          elements.viewport.classList.add("scene-invoked");
+          document.querySelector("#invocation-prompt").hidden = true;
+          interactionAudio.play("reveal");
+        },
+        onExit: () => {
+          button.hidden = false;
+          if (!sceneSwitching) resetSceneInvocation();
+        }
+      });
+      solarDemo.kind = mode;
+      sceneDemos.set(mode, solarDemo);
+      button.hidden = mode === "solar";
+      graphView?.setEnabled(false);
+      if (!invoked) resetSceneInvocation();
+      await solarDemo.open();
+      if (!solarDemo.renderer) throw new Error("No se pudo preparar el modelo 3D");
+    } else {
+      solarDemo?.close();
+      graphView?.setEnabled(invoked);
+      if (!invoked) resetSceneInvocation();
+    }
+    if (invoked) {
+      sceneInvocation.visible = true;
+      sceneInvocation.awaitingRelease = false;
+      elements.viewport.classList.remove("scene-awaiting-invocation");
+      elements.sceneStage.inert = false;
+      document.querySelector("#invocation-prompt").hidden = true;
+      interactionAudio.play("reveal");
+      animations.forEach(animation => animation.cancel());
+      animations = await animateModelChange(direction, true);
+      showToast(mode === "car" ? "Aventador · cambio con palma" : solar ? "Sistema solar · cambio con palma" : "Diagrama · cambio con palma");
+    } else solarDemo?.status("Muestra tu palma abierta durante un segundo para invocar el modelo.");
+  } catch (error) {
+    solarDemo?.close();
+    button.hidden = false;
+    graphView?.setEnabled(sceneInvocation.visible);
+    showToast("No se pudo cambiar de modelo: " + error.message, true);
+  } finally {
+    animations.forEach(animation => animation.cancel());
+    sceneSwitching = false;
+    button.disabled = false;
+  }
+}
+
 function handleGestureFrame(sample) {
   solarDemo?.trackingStatus(sample.controlStatus, sample.allHands?.length || 0);
   drawHandOverlay(sample);
-  if (!gestureEngine?.active) return;
+  if (!gestureEngine?.active || sceneSwitching) return;
 
   gestureUiFrame += 1;
   const hands = (sample.hands?.length ? sample.hands : sample.detected ? [sample] : []).filter((hand) => hand?.detected);
+  if (handleSceneInvocation(hands)) return;
+  if (handleModelSwipe(hands)) return;
   if (!hands.length) {
+    mapHandControls?.reset();
     if (solarDemo?.active) solarDemo.handleHands([]);
     gestureMissingFrames += 1;
     if (gestureMissingFrames > 5) {
@@ -1356,7 +1598,18 @@ function handleGestureFrame(sample) {
   }
 
   gestureMissingFrames = 0;
+  if (sample.pendingZoom) {
+    finalizeGestureMove(); finalizeTwoHandGesture(); finalizeSceneSpatialManipulation();
+    mapHandControls?.reset(); solarDemo?.handleHands([]);
+    setGestureUi("pinching", "Preparando zoom con dos pellizcos", "Mantén ambas manos visibles; el arrastre de la selección está detenido.");
+    return;
+  }
+  if (sample.missingOwner && gestureTwoHandState && hands.some(hand => hand.pinching)) {
+    setGestureUi("searching", "Gesto de dos manos en pausa", "Vuelve a mostrar ambas manos o abre la pinza para seleccionar y arrastrar con una mano.");
+    return;
+  }
   if (solarDemo?.active) {
+    mapHandControls?.reset();
     const menuHand = hands.find(hand => hand.pointing && hand.pointerPoint);
     if (menuHand && updateManualMenuGestureTarget(menuHand.pointerPoint)) {
       solarDemo.handleHands([]);
@@ -1366,28 +1619,28 @@ function handleGestureFrame(sample) {
     solarDemo.handleHands(hands);
     return;
   }
-  const rotationPair = findFistOpenRotationPair(hands);
-  if (rotationPair) {
-    finalizeGestureMove(false);
-    finalizeSceneSpatialManipulation(false);
-    finalizeTwoHandGesture();
-    resetGestureDismiss();
-    setGestureHoverTarget(null);
-    clearManualMenuGestureTarget();
-    const rotation = updateFistSpatialManipulator(rotationPair.fist, rotationPair.anchor);
-    if (rotation.waiting) {
-      const status = rotation.anchorDrift ? "Mantén fija la palma abierta" : "Preparando órbita de dos manos";
-      const hint = rotation.anchorDrift
-        ? "La palma abierta se movió; déjala quieta y usa solo el puño para controlar el grafo."
-        : "Deja una mano abierta y quieta como referencia; cierra la otra para mover y rotar el grafo.";
-      setGestureUi("rotating", status, hint);
-    } else {
-      setGestureUi("rotating", "Órbita con referencia fija", `El puño controla el grafo; la palma abierta permanece fija · Z ${Math.round(rotation.rotation.z)}° acumulados.`);
-    }
+  const navigation = elements.manualMenu.hidden ? mapHandControls?.update(hands, performance.now()) : (mapHandControls?.reset(), null);
+  if (navigation) {
+    finalizeGestureMove(); finalizeTwoHandGesture(); finalizeSceneSpatialManipulation();
+    finalizeGestureRotation(false); resetGestureDismiss(); setGestureHoverTarget(null); clearManualMenuGestureTarget();
+    interactionAudio.command(navigation.mode, navigation.done && navigation.available !== false);
+    if (navigation.mode === "orbit") setGestureUi("spatial", "Puño: girando la vista", "Mueve el puño horizontal o verticalmente para orbitar; abre la mano para soltar.");
+    else if (navigation.mode === "zoom-release") setGestureUi("pinching", "Zoom soltado", "Abre ambos pellizcos antes de volver a mover un objeto con una mano.");
+    else if (navigation.mode === "pinch-zoom") setGestureUi("pinching", "Dos pellizcos: zoom", "Separa las manos para acercar; júntalas para alejar. No se mueven los cuadros seleccionados.");
+    else if (navigation.mode === "zoom") setGestureUi("spatial", "Dos puños: zoom", "Sepáralos para acercar; júntalos para alejar. Un pellizco mueve la selección; dos pellizcos también hacen zoom.");
+    else if (navigation.mode === "focus") setGestureUi("spatial", navigation.done ? (navigation.available ? "Selección enfocada" : "Selecciona primero un cuadro") : `V: enfocar ${Math.round(navigation.progress * 100)}%`, "Mantén índice y medio en V durante 0.75 s; cambia de gesto antes de repetir.");
+    else setGestureUi("spatial", navigation.done ? "Vista recentrada" : `Pulgar arriba: recentrar ${Math.round(navigation.progress * 100)}%`, "Mantén el pulgar arriba durante 1.1 s; conserva las posiciones de los cuadros.");
     return;
   }
-  if (gestureRotationState?.mode === "fist-open-pair") finalizeGestureRotation(false);
-  const spatial = updateSceneSpatialManipulator(hands);
+  interactionAudio.command(null, false);
+  if (graphView && hands.every(hand => hand.openPalm)) {
+    finalizeGestureMove(); finalizeTwoHandGesture(); finalizeSceneSpatialManipulation();
+    resetGestureDismiss(); setGestureHoverTarget(null); clearManualMenuGestureTarget();
+    setGestureUi("detected", "Mano abierta: control liberado", "Índice selecciona · garra desplaza · puño gira · dos pellizcos zoom · V enfoca · pulgar arriba recentra.");
+    return;
+  }
+  finalizeGestureRotation(false);
+  const spatial = hands.some(hand => hand.pinching) ? { candidate: false } : updateSceneSpatialManipulator(hands);
   if (spatial.candidate) {
     finalizeGestureMove(false);
     finalizeTwoHandGesture();
@@ -1396,9 +1649,9 @@ function handleGestureFrame(sample) {
     setGestureHoverTarget(null);
     clearManualMenuGestureTarget();
     if (spatial.waiting) {
-      setGestureUi("spatial", "Preparando volumen espacial", "Mantén las dos manos abiertas como si sujetaras una pelota para calibrar el lienzo.");
+      setGestureUi("spatial", "Preparando garra", "Mantén una garra estable: dedos parcialmente cerrados, sin hacer puño.");
     } else {
-      setGestureUi("spatial", "Paneo del diagrama", "Mueve las dos manos abiertas para desplazarte por el grafo; la órbita se controla con un puño y la otra palma abierta fija.");
+      setGestureUi("spatial", "Modelo tomado con garra", "Mueve la garra para desplazar todo el modelo; abre la mano para soltar.");
     }
     return;
   }
@@ -1413,39 +1666,22 @@ function handleGestureFrame(sample) {
     finalizeGestureRotation(false);
     setGestureHoverTarget(null);
     clearManualMenuGestureTarget();
-    const distance = distance2D(pinchAnchors[0], pinchAnchors[1]);
-    if (!gestureTwoHandState) {
-      const mode = classifyTwoHandGesture(distance, TWO_HAND_ZOOM_MAX_DISTANCE);
-      gestureTwoHandState = { mode };
-      if (mode === "zoom") {
-        gestureZoomState = { startDistance: distance, startZoom: zoom, moved: false };
-      }
-    }
-    if (gestureTwoHandState.mode === "zoom" && gestureZoomState) {
-      const nextZoom = calculateGestureZoom(gestureZoomState.startZoom, gestureZoomState.startDistance, distance);
-      gestureZoomState.moved ||= Math.abs(nextZoom - gestureZoomState.startZoom) > 0.5;
-      zoom = nextZoom;
-      elements.zoomReadout.textContent = `${Math.round(zoom)}%`;
+    const separation = distance2D(pinchAnchors[0], pinchAnchors[1]);
+    const key = pinchHands.map(hand => hand.handIndex).sort((a, b) => a - b).join(',');
+    if (gestureTwoHandState?.key !== key || gestureTwoHandState.startDistance <= .02) {
+      gestureTwoHandState = { mode: "zoom", key, startDistance: separation, startZoom: zoom };
+    } else if (separation > .02) {
+      zoom = calculateGestureZoom(gestureTwoHandState.startZoom, gestureTwoHandState.startDistance, separation);
       updateVisualPositions();
-      setGestureUi("zooming", "Zoom general", `Escena completa · separa o acerca las pinzas · ${Math.round(zoom)}%`);
-    } else if (gestureTwoHandState.mode === "move") {
-      finalizeGestureZoom();
-      if (!gestureMultiMoveState) startGestureMultiMove(pinchHands);
-      const movedObjects = updateGestureMultiMove(pinchHands);
-      if (movedObjects?.length === 2) {
-        setGestureUi("multi-moving", "Dos cards en movimiento", `${movedObjects[0].title} · ${movedObjects[1].title}. Abre las pinzas para soltar.`);
-      } else {
-        setGestureUi("pinching", "Dos pinzas separadas", "Coloca cada pinza sobre una card distinta para moverlas juntas.");
-      }
-    } else {
-      setGestureUi("pinching", "Dos pinzas muy juntas", "Mantén las pinzas visibles y sepáralas para hacer zoom general.");
+      elements.zoomReadout.textContent = `${Math.round(zoom)}%`;
     }
+    setGestureUi("pinching", "Dos pellizcos: zoom", "Separa para acercar; junta para alejar. Los cuadros conservan sus posiciones.");
     return;
   }
 
   finalizeTwoHandGesture();
   const pointingHands = hands.filter((hand) => hand.pointing && hand.pointerPoint);
-  if (pointingHands.length) {
+  if (pointingHands.length && !pinchingHand.pinching) {
     finalizeGestureMove();
     finalizeGestureRotation();
     resetGestureDismiss();
@@ -1460,18 +1696,18 @@ function handleGestureFrame(sample) {
       return;
     }
     if (pointingHands.length > 1) {
-      let lastTarget = null;
-      pointingHands.forEach((hand) => {
+      const targets = [];
+      pointingHands.forEach(hand => {
         const target = findGestureTarget(hand.pointerPoint);
         if (!target) return;
-        lastTarget = target;
+        targets.push(target);
         gestureSelectionIds[hand.handIndex] = target.id;
         gestureSelectionId = target.id;
-        if (selectedId !== target.id) selectObject(target.id, { focus: false });
       });
-      setGestureDetailTarget(lastTarget?.id ?? null);
+      if (targets.length) selectObjects(targets.map(target => target.id));
+      setGestureDetailTarget(selectedId);
       setGestureHoverTarget(null);
-      setGestureUi("pointing", "Dos índices activos", "Selecciona una card y usa Detalle; cierra dos pinzas separadas para mover dos cards.");
+      setGestureUi("pointing", targets.length ? `Selección múltiple: ${selectedIds.size} objeto${selectedIds.size === 1 ? "" : "s"}` : "Dos índices: selección múltiple", "Apunta a un cuadro distinto con cada índice. Un pellizco mueve su cuadro; dos pellizcos hacen zoom.");
       return;
     }
 
@@ -1486,7 +1722,7 @@ function handleGestureFrame(sample) {
 
     gestureSelectionIds[pointingHand.handIndex] = target.id;
     gestureSelectionId = target.id;
-    if (selectedId !== target.id) selectObject(target.id, { focus: false });
+    if (selectedId !== target.id || selectedIds.size !== 1) selectObject(target.id, { focus: false });
     setGestureDetailTarget(target.id);
     setGestureHoverTarget(target.id);
     setGestureUi("pointing", `Índice: ${target.title}`, "Card seleccionada. Usa Detalle para abrir su inspector; haz pinza para moverla.");
@@ -1499,10 +1735,10 @@ function handleGestureFrame(sample) {
     if (pinchingHand.fist) {
       finalizeGestureRotation(false);
       setGestureHoverTarget(null);
-      setGestureUi("detected", "Puño en espera", "Para orbitar, muestra la otra mano abierta y déjala fija; el puño será el único controlador.");
+      setGestureUi("detected", "Puño en espera", "Abre un poco los dedos para formar una garra y mover todo el modelo.");
       return;
     }
-    const dismiss = trackGestureDismiss(pinchingHand);
+    const dismiss = pinchingHand.openPalm ? { detected: false } : trackGestureDismiss(pinchingHand);
     if (dismiss.detected) {
       if (dismiss.target) {
         finalizeGestureRotation(false);
@@ -1520,18 +1756,19 @@ function handleGestureFrame(sample) {
     setGestureUi(
       "detected",
       target ? `Objetivo: ${target.title}` : "Mano detectada",
-      target ? "Barrido lateral para retirarla · índice para seleccionarla." : "Extiende el índice para seleccionar; para orbitar, muestra un puño y deja la otra palma abierta y fija."
+      target ? "Barrido lateral para retirarla · índice para seleccionarla." : "Índice para seleccionar; pellizco para arrastrar; garra para mover todo el modelo."
     );
     return;
   }
 
   resetGestureDismiss();
   finalizeGestureRotation(false);
-  const selectedObject = gestureSelectionId ? findObject(scene, gestureSelectionId) : null;
+  const selectedForHand = gestureSelectionIds[pinchingHand.handIndex];
+  const selectedObject = selectedForHand ? findObject(scene, selectedForHand) : null;
   if (!selectedObject || !pinchingHand.point) {
     finalizeGestureMove();
     setGestureHoverTarget(null);
-      setGestureUi("pinching", "Pinza sin selección", "Selecciona primero una card con el índice; después une índice y pulgar con los otros 3 dedos arriba para moverla.");
+      setGestureUi("pinching", "Pinza sin selección", "Selecciona primero una card con el índice; después une índice y pulgar para moverla.");
     return;
   }
 
@@ -1548,10 +1785,7 @@ function handleGestureFrame(sample) {
     };
   }
 
-  const nextPosition = clampScenePosition({
-    x: gestureMoveState.startX + (pinchingHand.point.x - gestureMoveState.startPoint.x) * 100,
-    y: gestureMoveState.startY + (pinchingHand.point.y - gestureMoveState.startPoint.y) * 100
-  });
+  const nextPosition = objectDragPosition(selectedObject, gestureMoveState.startPoint, pinchingHand.point, gestureMoveState.startX, gestureMoveState.startY);
   const movedDistance = Math.hypot(nextPosition.x - selectedObject.x, nextPosition.y - selectedObject.y);
   selectedObject.x = nextPosition.x;
   selectedObject.y = nextPosition.y;
@@ -1560,7 +1794,7 @@ function handleGestureFrame(sample) {
   updateVisualPositions();
   if (gestureUiFrame % 3 === 0) renderInspector();
   setGestureHoverTarget(null);
-  setGestureUi("pinching", "Pinza activa", `Moviendo ${selectedObject.title}. Índice + pulgar juntos y 3 dedos arriba; abre los dedos para soltar.`);
+  setGestureUi("pinching", "Pinza activa", `Moviendo ${selectedObject.title}. Índice + pulgar juntos; sepáralos para soltar.`);
 }
 
 function handleGestureEngineStatus(mode, message) {
@@ -1573,6 +1807,7 @@ function handleGestureEngineStatus(mode, message) {
 }
 
 async function startGestureControl() {
+  await interactionAudio.unlock();
   elements.gestureToggle.disabled = true;
   setGestureUi("loading", "Preparando gestos", "Solicitando cámara y cargando el modelo local.");
   const cameraReady = await startCamera();
@@ -1587,12 +1822,14 @@ async function startGestureControl() {
       video: elements.cameraPreview,
       onFrame: handleGestureFrame,
       onStatus: handleGestureEngineStatus,
+      allowSingleHand: () => true,
       targetFps: 15
     });
     await gestureEngine.initialize();
     gestureEngine.start();
+    setManualMenuOpen(false);
     setGestureUi("searching", "Buscando manos", "Muestra una o dos manos completas frente a la cámara.");
-    showToast("Gestos activos: índice selecciona · pinza = índice + pulgar juntos y 3 dedos arriba · puño + palma abierta fija = órbita y desplazamiento · dos manos abiertas = paneo · dos pinzas hacen zoom general");
+    showToast("Palma abierta un segundo para invocar. Después, índice selecciona · dos índices seleccionan varios · pellizco mueve selección · garra desplaza todo · puño gira · dos pellizcos zoom · V enfoca · pulgar arriba recentra");
   } catch (error) {
     setGestureUi("error", "No se pudo iniciar", error.message || "Error al cargar el seguimiento de mano");
     showToast("No fue posible iniciar el seguimiento de mano", true);
@@ -1602,6 +1839,12 @@ async function startGestureControl() {
 }
 
 function stopGestureControl(announce = true) {
+  stopModelGlide();
+  modelSwipe.reset();
+  interactionAudio.stop();
+  sceneInvocation.cancelHold();
+  document.querySelector("#invocation-ring").hidden = true;
+  mapHandControls?.reset();
   finalizeGestureMove(false);
   finalizeSceneSpatialManipulation(false);
   finalizeTwoHandGesture();
@@ -1613,7 +1856,7 @@ function stopGestureControl(announce = true) {
   setGestureHoverTarget(null);
   gestureEngine?.stop();
   clearGestureCanvas();
-  setGestureUi("idle", "Gestos apagados", "Activa Gestos para seleccionar con el índice, mover cards con pinza de 2 dedos + 3 arriba, hacer paneo con dos manos abiertas o orbitar con un puño y la otra palma abierta fija.");
+  setGestureUi("idle", "Gestos apagados", "Activa Gestos: índice selecciona · dos índices seleccionan varios · pellizco mueve selección · garra desplaza todo · puño gira · dos pellizcos zoom · V enfoca · pulgar arriba recentra.");
   if (announce) showToast("Control por gestos desactivado");
 }
 
@@ -1659,10 +1902,18 @@ function toggleVoice() {
   recognition.start();
 }
 
+function objectDragPosition(object, start, end, startX = object.x, startY = object.y) {
+  return clampScenePosition(graphView ? graphView.dragPosition(object, start, end, startX, startY) : {
+    x: startX + (end.x - start.x) * 100,
+    y: startY + (end.y - start.y) * 100
+  });
+}
+
 function beginDrag(event, id) {
   if (event.button !== 0) return;
   const object = findObject(scene, id);
   if (!object) return;
+  interactionAudio.motion("grab");
   dragState = { id, startX: event.clientX, startY: event.clientY, original: cloneScene(scene), moved: false };
   event.currentTarget.setPointerCapture?.(event.pointerId);
   selectObject(id);
@@ -1673,8 +1924,10 @@ function beginDrag(event, id) {
     dragState.moved = true;
     const rect = elements.viewport.getBoundingClientRect();
     const target = findObject(scene, id);
-    target.x = Math.max(6, Math.min(94, target.x + ((moveEvent.clientX - dragState.startX) / rect.width) * 100));
-    target.y = Math.max(8, Math.min(92, target.y + ((moveEvent.clientY - dragState.startY) / rect.height) * 100));
+    const next = objectDragPosition(target,
+      { x: (dragState.startX - rect.left) / rect.width, y: (dragState.startY - rect.top) / rect.height },
+      { x: (moveEvent.clientX - rect.left) / rect.width, y: (moveEvent.clientY - rect.top) / rect.height });
+    Object.assign(target, next);
     dragState.startX = moveEvent.clientX;
     dragState.startY = moveEvent.clientY;
     updateVisualPositions();
@@ -1689,6 +1942,7 @@ function beginDrag(event, id) {
       showToast("Objeto reposicionado; puedes deshacerlo");
     }
     dragState = null;
+    interactionAudio.motion(null);
     window.removeEventListener("pointermove", onMove);
     window.removeEventListener("pointerup", onUp);
   };
@@ -1698,28 +1952,36 @@ function beginDrag(event, id) {
 
 function updateZoom(delta) {
   zoom = Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, zoom + delta));
-  elements.zoomReadout.textContent = `${zoom}%`;
+  elements.zoomReadout.textContent = `${graphView ? graphView.zoomPercent(zoom) : zoom}%`;
   updateVisualPositions();
 }
 
+function updateSoundToggle() {
+  const button = document.querySelector("#sound-toggle");
+  button.setAttribute("aria-pressed", String(interactionAudio.enabled));
+  button.setAttribute("aria-label", interactionAudio.enabled ? "Silenciar sonidos" : "Activar sonidos");
+  button.title = interactionAudio.enabled ? "Silenciar sonidos" : "Activar sonidos";
+  button.classList.toggle("is-muted", !interactionAudio.enabled);
+}
+
+document.addEventListener("pointerdown", () => { stopModelGlide(); interactionAudio.unlock(); }, { capture: true });
+document.addEventListener("keydown", () => { interactionAudio.unlock(); }, { capture: true });
+document.addEventListener("visibilitychange", () => { if (document.hidden) { stopModelGlide(); interactionAudio.stop(); } });
+document.querySelector("#sound-toggle").addEventListener("click", async () => {
+  interactionAudio.setEnabled(!interactionAudio.enabled);
+  updateSoundToggle();
+  if (interactionAudio.enabled && await interactionAudio.unlock()) interactionAudio.play("confirm");
+});
+updateSoundToggle();
+
 mountManualMenu();
 
-document.querySelector('#solar-launcher').addEventListener('click', async (event) => {
-  const button = event.currentTarget;
-  if (solarDemo?.active) return;
-  button.disabled = true;
-  try {
-    const { SolarDemo } = await import('/public/generated/solar-demo.js');
-    solarDemo ||= new SolarDemo({viewport:elements.viewport, video:elements.cameraPreview,
-      onCamera:startGestureControl, onClaim:()=>gestureEngine?.tracking.release(), onExit:()=>{button.hidden=false;}});
-    finalizeGestureMove(false); finalizeGestureRotation(false); finalizeSceneSpatialManipulation(false); finalizeTwoHandGesture();
-    setManualMenuOpen(false);
-    button.hidden = true;
-    await solarDemo.open();
-  } catch(error) {
-    button.hidden=false;
-    showToast('No se pudo abrir la maqueta: '+error.message,true);
-  } finally { button.disabled=false; }
+document.querySelector('#solar-launcher').addEventListener('click', () => {
+  if (solarDemo?.kind !== 'solar' || !solarDemo?.active) void switchSceneModel(true);
+});
+
+document.querySelector('#car-launcher').addEventListener('click', () => {
+  if (solarDemo?.kind !== 'car' || !solarDemo?.active) void switchSceneModel('car');
 });
 
 document.querySelectorAll("[data-icon]").forEach((target) => {
@@ -1746,6 +2008,9 @@ document.querySelector("#save-button").addEventListener("click", saveScene);
 document.querySelector("#analyze-button").addEventListener("click", openAnalysisDialog);
 elements.cameraToggle.addEventListener("click", toggleCamera);
 elements.gestureToggle.addEventListener("click", toggleGestureControl);
+document.querySelector("#invocation-start").addEventListener("click", async () => {
+  if (!gestureEngine?.active && !elements.gestureToggle.disabled) await startGestureControl();
+});
 elements.voiceButton.addEventListener("click", toggleVoice);
 elements.gestureDetailButton.addEventListener("click", openGestureDetail);
 elements.undoButton.addEventListener("click", undo);
@@ -1757,7 +2022,9 @@ elements.manualMenu.addEventListener("click", (event) => {
 document.querySelector("#zoom-in").addEventListener("click", () => updateZoom(10));
 document.querySelector("#zoom-out").addEventListener("click", () => updateZoom(-10));
 elements.spatialRecenter.addEventListener("click", recenterSceneManipulator);
-document.querySelector("#reset-scene").addEventListener("click", () => {
+function resetSceneView() {
+  stopModelGlide();
+  if (sceneInvocation.visible) interactionAudio.play("confirm");
   finalizeGestureMove(false);
   finalizeSceneSpatialManipulation(false);
   finalizeTwoHandGesture();
@@ -1765,9 +2032,16 @@ document.querySelector("#reset-scene").addEventListener("click", () => {
   zoom = 100;
   sceneRotation = { ...DEFAULT_SCENE_ROTATION };
   sceneSpatialTransform = { x: 0, y: 0, z: 0 };
+  updateSceneRotation();
+  graphView?.stopInertia();
+  graphView?.reset();
   render();
   showToast("Vista restablecida");
-});
+}
+document.querySelector("#reset-scene").addEventListener("click", () => { mapHandControls?.reset(); resetSceneView(); });
+document.querySelector("#three-focus").addEventListener("click", () => graphView?.focusSelected());
+document.querySelector("#three-top").addEventListener("click", () => graphView?.topView());
+document.querySelector("#three-reset").addEventListener("click", () => document.querySelector("#reset-scene").click());
 document.querySelector("#help-button").addEventListener("click", showHelp);
 document.querySelector("#close-inspector").addEventListener("click", () => elements.inspector.classList.remove("is-open"));
 
@@ -1805,7 +2079,10 @@ window.addEventListener("keydown", (event) => {
 });
 
 window.addEventListener("beforeunload", () => {
+  stopModelGlide();
+  interactionAudio.close();
   solarDemo?.close();
+  graphView?.destroy();
   gestureEngine?.close();
   cameraStream?.getTracks().forEach((track) => track.stop());
 });
@@ -1824,6 +2101,19 @@ async function loadRuntimeConfig() {
 
 async function initialize() {
   await loadRuntimeConfig();
+  try {
+    const { GraphThree } = await import("/public/generated/graph-three.js");
+    graphView = new GraphThree({ viewport: elements.viewport, nodes: elements.nodes, depth: getSceneDepth, onReset: resetSceneView,
+      onZoom: value => { elements.zoomReadout.textContent = `${Math.round(value * zoom / 100)}%`; } });
+    mapHandControls = new MapHandControls(graphView, { onReset: resetSceneView, hasSelection: () => Boolean(selectedId) });
+    graphView.setEnabled(false);
+    document.querySelector(".three-navigation").hidden = false;
+    document.querySelector(".scene-hint").textContent = "Barrido lateral con palma abierta: cambiar modelo · Manos: índice selecciona · dos índices seleccionan varios · pellizco mueve selección · garra desplaza todo · puño gira · dos pellizcos zoom · V enfoca · pulgar arriba recentra";
+  } catch (error) {
+    console.error("Mapa 3D:", error);
+    showToast("La navegación 3D no está disponible; se conserva la vista del mapa", true);
+  }
+  resetSceneInvocation();
   render();
   if (runtimeConfig.defaultRepository && (!scene.analysis || scene.analysis.repoPath !== runtimeConfig.defaultRepository)) {
     window.setTimeout(() => analyzeRepository(runtimeConfig.defaultRepository), 220);

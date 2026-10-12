@@ -26,3 +26,10 @@
 .solar-active .camera-wash{background:transparent}
 .solar-active .camera-layer video{filter:none}
 @media(max-width:600px){.solar-heading{left:15px;top:60px}.solar-dock{bottom:12px;left:12px;width:calc(100% - 24px)}.solar-launcher{right:130px}}
+.car-launcher{right:280px}
+.car-demo .solar-dock{width:min(470px,calc(100% - 40px))}
+.car-demo .solar-heading strong{color:#d3fc84}
+.car-parts{display:flex;gap:6px;flex-wrap:wrap;padding-top:8px}
+.car-parts button[aria-pressed=true]{background:#486326;border-color:#c4f878}
+.car-stage{font-size:12px;color:#c4f878;letter-spacing:.06em}
+@media(max-width:600px){.car-launcher{right:260px;padding:10px 8px}.car-demo .solar-dock{max-height:45%}}

@@ -54,7 +54,7 @@ export function smoothPoint(previous, next, alpha = 0.34) {
 
 export function analyzeHandLandmarks(landmarks, options = {}) {
   if (!Array.isArray(landmarks) || landmarks.length < 21) {
-    return { detected: false, pinching: false, threeFingersUp: false, thumbIsCurled: false, openPalm: false, pointing: false, fist: false, pinchRatio: null, palmScale: null, point: null, pointerPoint: null, center: null, orientation: null };
+    return { detected: false, peace: false, thumbsUp: false, claw: false, pinching: false, threeFingersUp: false, thumbIsCurled: false, openPalm: false, pointing: false, fist: false, pinchRatio: null, palmScale: null, point: null, pointerPoint: null, center: null, orientation: null };
   }
 
   const thumbTip = landmarks[4];
@@ -75,6 +75,9 @@ export function analyzeHandLandmarks(landmarks, options = {}) {
     return tipDistance > pipDistance * 1.12 && tipDistance - mcpDistance > palmScale * 0.22;
   };
   const indexExtended = fingerIsExtended(8, 7, 5);
+  const middleExtended = fingerIsExtended(12, 11, 9);
+  const ringExtended = fingerIsExtended(16, 15, 13);
+  const pinkyExtended = fingerIsExtended(20, 19, 17);
   const otherFingersCurled = [
     [12, 11, 9],
     [16, 15, 13],
@@ -85,15 +88,47 @@ export function analyzeHandLandmarks(landmarks, options = {}) {
     [16, 15, 13],
     [20, 19, 17]
   ].every(([tipIndex, pipIndex, mcpIndex]) => fingerIsExtended(tipIndex, pipIndex, mcpIndex));
-  const pinching = pinchContact && threeFingersUp;
-  const openPalm = !pinching && [
+  const pinching = pinchContact;
+  const peace = !pinching && indexExtended && middleExtended && !ringExtended && !pinkyExtended
+    && distance2D(indexTip, landmarks[12]) > palmScale * .25;
+  const thumbsUp = !indexExtended && otherFingersCurled
+    && distance2D(thumbTip, wrist) > distance2D(landmarks[3], wrist) * 1.1
+    && distance2D(thumbTip, landmarks[2]) > palmScale * .45
+    && thumbTip.y < landmarks[3].y - palmScale * .18
+    && thumbTip.y < Math.min(indexTip.y, landmarks[12].y, landmarks[16].y, landmarks[20].y) - palmScale * .25
+    && Math.abs(thumbTip.x - landmarks[3].x) < palmScale * .75;
+  // De frente, las puntas dobladas pueden proyectarse casi sobre la misma
+  // línea que sus nudillos: un ángulo muy cerrado también es una garra.
+  const wasClaw = Boolean(options.wasClaw);
+  const partiallyBent = [[5, 6, 8], [9, 10, 12], [13, 14, 16], [17, 18, 20]].map(([base, joint, tip]) => {
+    const vector = (from, to) => [to.x - from.x, to.y - from.y, (to.z || 0) - (from.z || 0)];
+    const first = vector(landmarks[joint], landmarks[base]);
+    const second = vector(landmarks[joint], landmarks[tip]);
+    const lengths = Math.hypot(...first) * Math.hypot(...second);
+    if (!lengths) return false;
+    const cosine = first.reduce((sum, value, i) => sum + value * second[i], 0) / lengths;
+    const gap = Math.hypot(...vector(landmarks[base], landmarks[tip])) / palmScale;
+    return cosine > (wasClaw ? -0.94 : -0.85) && gap > (wasClaw ? 0.25 : 0.35) && gap < 2.4;
+  });
+  const claw = !thumbsUp && !peace && !pinching && !indexExtended && !threeFingersUp && partiallyBent[0] && partiallyBent.filter(Boolean).length >= (wasClaw ? 2 : 3);
+  const openPalm = !pinching && !claw && [
     [8, 7, 5],
     [12, 11, 9],
     [16, 15, 13],
     [20, 19, 17]
   ].every(([tipIndex, pipIndex, mcpIndex]) => fingerIsExtended(tipIndex, pipIndex, mcpIndex));
-  const pointing = !pinching && indexExtended && otherFingersCurled;
-  const fist = !pinching && !openPalm && !pointing && !indexExtended && otherFingersCurled && thumbIsCurled;
+  // Los dedos juntos vistos de canto se evalúan en 3D, sin exigir pulgar abierto.
+  const straightFingers = [[5,6,8],[9,10,12],[13,14,16],[17,18,20]].filter(([base,joint,tip]) => {
+    const vector=(a,b)=>[b.x-a.x,b.y-a.y,(b.z||0)-(a.z||0)];
+    const u=vector(landmarks[joint],landmarks[base]),v=vector(landmarks[joint],landmarks[tip]);
+    const length=Math.hypot(...u)*Math.hypot(...v);
+    if(!length)return false;
+    return u.reduce((sum,n,i)=>sum+n*v[i],0)/length < -.88
+      && Math.hypot(...vector(wrist,landmarks[tip])) > Math.hypot(...vector(wrist,landmarks[joint]))*1.08;
+  }).length;
+  const swipePalm = !pinching && !claw && !peace && straightFingers >= 3;
+  const pointing = !pinching && !claw && indexExtended && otherFingersCurled;
+  const fist = !thumbsUp && !peace && !pinching && !claw && !openPalm && !swipePalm && !pointing && !indexExtended && otherFingersCurled && thumbIsCurled;
   const rawPoint = {
     x: 1 - (thumbTip.x + indexTip.x) / 2,
     y: (thumbTip.y + indexTip.y) / 2
@@ -110,10 +145,15 @@ export function analyzeHandLandmarks(landmarks, options = {}) {
 
   return {
     detected: true,
+    peace,
+    thumbsUp,
+    claw,
     pinching,
     threeFingersUp,
     thumbIsCurled,
     openPalm,
+    swipePalm,
+    rawCenter,
     pointing,
     fist,
     pinchRatio,

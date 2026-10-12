@@ -5,21 +5,21 @@ const distance=(a,b)=>Math.hypot(a.x-b.x,a.y-b.y);
 const angle=(a,b)=>Math.atan2(Math.sin(a-b),Math.cos(a-b));
 
 export class SolarDemo {
-  constructor({viewport,video,onCamera,onExit,onClaim}) {
-    Object.assign(this,{viewport,video,onCamera,onExit,onClaim});
+  constructor({viewport,video,onCamera,onExit,onClaim,onSound,onMotion}) {
+    Object.assign(this,{viewport,video,onCamera,onExit,onClaim,onSound,onMotion});
     this.objectsEnabled=true;
     this.active=false;this.time=0;this.paused=false;this.offsets={};this.hidden=new Set();
     this.anchor={x:.5,y:.48};this.depth=18;this.scale=1;this.angles=[.55,0,0];
-    this.bodyEnabled=true;this.bodyScale=1;this.lastBodyAt=0;this.people=0;this.selected=3;
+    this.bodyEnabled=true;this.bodyScale=1;this.lastBodyAt=0;this.people=0;this.selected=null;this.selectedIds=new Set();this.gestureSelections={};
     this.element=document.createElement('section');this.element.className='solar-demo';this.element.hidden=true;
     this.element.innerHTML=`<canvas class="solar-canvas" aria-label="Maqueta tridimensional del sistema solar"></canvas>
       <div class="solar-labels" aria-hidden="true"></div>
       <div class="solar-objects" style="position:absolute;inset:0;pointer-events:none"></div>
-      <div class="solar-heading"><span class="solar-kicker">JAVIR LAB · TYPEGPU</span><strong>Sistema solar</strong><span>Escala ilustrativa · profundidad estimada</span></div>
+      <div class="solar-heading"><span class="solar-kicker">JAVIR LAB · THREE.JS</span><strong>Sistema solar</strong><span>Escala ilustrativa · profundidad estimada</span></div>
       <div class="solar-dock">
         <div class="solar-actions"><button type="button" data-action="camera">Cámara y gestos</button><button type="button" data-action="place">Colocar en mesa</button><button type="button" data-action="pause">Pausar órbitas</button><button type="button" data-action="exit">Volver al grafo</button></div>
         <p class="solar-status" role="status">Preparando maqueta…</p>
-        <p class="solar-hand-status">Muestra tus dos palmas abiertas para tomar control.</p>
+        <p class="solar-hand-status">Índice: selecciona · dos índices: selección múltiple · un pellizco: mueve el planeta elegido · dos pellizcos: zoom · garra: mueve todo el sistema.</p>
         <button type="button" data-action="claim">Tomar control</button>
         <details><summary>Ajustar superficie y cuerpos</summary>
           <p>Mantén la cámara fija. Señala el centro de la mesa con el índice o haz clic en él. Ajusta inclinación y distancia; la cámara no mide un plano físico.</p>
@@ -35,7 +35,7 @@ export class SolarDemo {
           <p class="solar-body-status">Cuerpos: cámara apagada</p>
           <p>De frente o de perfil, la maqueta permanece delante. Al dar la espalda, puede quedar detrás tras una breve espera. Postura estimada: no confirma que hayas cruzado la mesa. Desmarca la opción para mantenerla siempre delante.</p>
         </details>
-        <p class="solar-help">Puño + palma fija: girar y mover · dos pinzas juntas: zoom · índice y pinza: tomar planeta · dos palmas: desplazar</p>
+        <p class="solar-help">Barrido lateral con palma abierta: cambiar de modelo · Índice: selecciona · dos índices: selección múltiple · un pellizco: mueve selección · dos pellizcos: zoom · garra: desplaza todo el sistema</p>
       </div>`;
     viewport.append(this.element);this.canvas=this.element.querySelector('canvas');this.labels=this.element.querySelector('.solar-labels');
     this.labelElements=PLANETS.map(([name],i)=>{const e=document.createElement('span');e.textContent=name;e.hidden=true;this.labels.append(e);return e;});
@@ -50,12 +50,12 @@ export class SolarDemo {
     });
     this.canvas.addEventListener('pointerdown',e=>this.pointerDown(e));
     this.canvas.addEventListener('pointermove',e=>this.pointerMove(e));
-    const release=()=>{this.drag=null;};
+    const release=()=>{this.drag=null;this.onMotion?.(null);};
     this.canvas.addEventListener('pointerup',release);this.canvas.addEventListener('pointercancel',release);
     this.canvas.addEventListener('wheel',e=>{e.preventDefault();this.scale=clamp(this.scale*Math.exp(-e.deltaY*.001),.05,4);},{passive:false});
   }
   status(message){this.element.querySelector('.solar-status').textContent=message;}
-  trackingStatus(message,count){this.element.querySelector('.solar-hand-status').textContent=`${count} manos detectadas · ${message||'Muestra tus dos palmas abiertas'}`;}
+  trackingStatus(message,count){this.element.querySelector('.solar-hand-status').textContent=`${count} manos detectadas · ${message||'Apunta con el índice o forma una garra'}`;}
   showObjects(detections){
     const layer=this.element.querySelector('.solar-objects');layer.replaceChildren();
     if(!this.objectsEnabled)return;
@@ -76,11 +76,12 @@ export class SolarDemo {
     try {
       await renderer.initialize(this.canvas,message=>this.status(message));
       if(!this.active || this.renderer!==renderer){renderer.destroy();return;}
-      this.status('Maqueta lista. Activa cámara y gestos; después elige «Colocar en mesa».');
+      this.status('Sistema solar 3D listo. Shift + arrastrar gira; rueda hace zoom. Activa cámara y gestos para manipularlo con las manos.');
       this.lastFrame=performance.now();this.loop(this.lastFrame);
     } catch(error){renderer.destroy();if(this.renderer===renderer){this.status(error.message);this.renderer=null;}}
   }
   close(){
+    this.onMotion?.(null);
     this.active=false;cancelAnimationFrame(this.frame);this.stopBodies();this.renderer?.destroy();this.renderer=null;
     this.element.hidden=true;this.viewport.classList.remove('solar-active');this.gesture=null;this.drag=null;this.onExit?.();
   }
@@ -131,9 +132,9 @@ export class SolarDemo {
       values[0]=[w,h,this.video.videoWidth||1280,this.video.videoHeight||720];values[1]=[...center,this.scale];values[2]=[...this.angles,0];
       values[3]=[this.time,this.bodyEnabled && now-this.lastBodyAt<650?1:0,this.debug && now-this.lastBodyAt<650?1:0,0];
       this.positions.forEach((p,i)=>{values[4+i]=this.hidden.has(i)?[0,0,-100,0]:p;values[13+i]=[...PLANETS[i][3],1];});
-      this.renderer.render(values,w,h);
+      this.renderer.render(values,w,h,this.selectedIds);
       this.projected=this.positions.map(p=>projectPoint(p,width,height));
-      this.projected.forEach((p,i)=>{const e=this.labelElements[i];e.hidden=!p||this.hidden.has(i)||this.covered(p,now);if(p){e.style.transform=`translate(${p.x}px,${p.y+p.radius+12}px) translateX(-50%)`;e.classList.toggle('selected',i===this.selected);}});
+      this.projected.forEach((p,i)=>{const e=this.labelElements[i];e.hidden=!p||this.hidden.has(i)||this.covered(p,now);if(p){e.style.transform=`translate(${p.x}px,${p.y+p.radius+12}px) translateX(-50%)`;e.classList.toggle('selected',this.selectedIds.has(i));}});
       if(this.video.srcObject && !this.worker && !this.bodyFailed)this.startBodies();
       if(this.bodyEnabled || this.debug || this.objectsEnabled)this.captureBody(now);
     }
@@ -147,6 +148,8 @@ export class SolarDemo {
   }
   pick(point){
     const r=this.viewport.getBoundingClientRect();const x=point.x*r.width,y=point.y*r.height;
+    const hit=this.renderer?.pick(point);
+    if(hit!=null && !this.hidden.has(hit) && this.projected?.[hit] && !this.covered(this.projected[hit]))return hit;
     return (this.projected||[]).map((p,i)=>({p,i})).filter(({p,i})=>p&&!this.hidden.has(i)&&!this.covered(p)&&Math.hypot(x-p.x,y-p.y)<Math.max(22,p.radius+10)).sort((a,b)=>a.p.depth-b.p.depth)[0]?.i ?? null;
   }
   movePlanet(index,dx,dy){
@@ -156,17 +159,17 @@ export class SolarDemo {
   async click(event){
     const action=event.target.closest('[data-action]')?.dataset.action;if(!action)return;
     if(action==='exit'){this.close();return;}
-    if(action==='claim'){this.onClaim?.();this.gesture=null;this.status('Muestra solo tus dos palmas abiertas durante un segundo para fijar el control.');}
+    if(action==='claim'){this.onClaim?.();this.gesture=null;this.gestureSelections={};this.selected=null;this.selectedIds.clear();this.status('Apunta con el índice o forma una garra para tomar control.');}
     if(action==='camera'){this.bodyFailed=false;await this.onCamera();this.startBodies();}
     if(action==='place'){this.placing=true;this.gesture=null;this.status('Señala el centro de la mesa durante un segundo o haz clic en la superficie.');}
-    if(action==='pause'){this.paused=!this.paused;event.target.textContent=this.paused?'Reanudar órbitas':'Pausar órbitas';}
-    if(action==='reset'){this.anchor={x:.5,y:.48};this.angles=[.55,0,0];this.scale=1;this.depth=18;this.offsets={};this.hidden.clear();this.gesture=null;this.status('Maqueta recentrada. Vuelve a colocarla si moviste la cámara.');}
+    if(action==='pause'){this.onSound?.('confirm');this.paused=!this.paused;event.target.textContent=this.paused?'Reanudar órbitas':'Pausar órbitas';}
+    if(action==='reset'){this.onSound?.('confirm');this.anchor={x:.5,y:.48};this.angles=[.55,0,0];this.scale=1;this.depth=18;this.offsets={};this.hidden.clear();this.gesture=null;this.status('Maqueta recentrada. Vuelve a colocarla si moviste la cámara.');}
   }
-  place(point){this.anchor={...point};this.placing=false;this.gesture=null;this.status('Centro colocado. Ajusta la inclinación para alinear las órbitas con la mesa.');}
+  place(point){this.onSound?.('confirm');this.anchor={...point};this.placing=false;this.gesture=null;this.status('Centro colocado. Ajusta la inclinación para alinear las órbitas con la mesa.');}
   pointerDown(e){const r=this.canvas.getBoundingClientRect();const point={x:(e.clientX-r.left)/r.width,y:(e.clientY-r.top)/r.height};
     if(this.placing){this.place(point);return;}
-    const id=this.pick(point);if(id!==null)this.selected=id;
-    this.drag={point,id,orbit:e.shiftKey};this.canvas.setPointerCapture(e.pointerId);
+    const id=this.pick(point);if(id!==null){if(this.selected!==id || this.selectedIds.size!==1)this.onSound?.('select');this.selected=id;this.selectedIds=new Set([id]);}
+    this.onMotion?.(e.shiftKey?'orbit':'grab');this.drag={point,id,orbit:e.shiftKey};this.canvas.setPointerCapture(e.pointerId);
   }
   pointerMove(e){if(!this.drag)return;const r=this.canvas.getBoundingClientRect();const point={x:(e.clientX-r.left)/r.width,y:(e.clientY-r.top)/r.height};const dx=point.x-this.drag.point.x,dy=point.y-this.drag.point.y;
     if(this.drag.orbit){this.angles[1]+=dx*4;this.angles[0]+=dy*4;}
@@ -180,44 +183,76 @@ export class SolarDemo {
   }
   handleHands(hands){
     const now=performance.now();
-    const fist=hands.find(h=>h.fist),palm=hands.find(h=>h.openPalm);
-    if(fist && palm && !this.placing){
-      const key=`orbit-${fist.handedness||fist.handIndex}`;
-      if(this.gesture?.key!==key){this.gesture={key,since:now,fist:{...fist.center},palm:{...palm.center},orientation:{...fist.orientation},angles:[...this.angles],anchor:{...this.anchor},depth:this.depth,palmScale:fist.palmScale};}
-      const g=this.gesture;
-      if(distance(palm.center,g.palm)>.05){this.gesture=null;this.status('Mantén la palma abierta fija para reanudar el giro.');return;}
-      if(now-g.since<350){g.orientation={...fist.orientation};g.fist={...fist.center};this.status('Preparando órbita: palma abierta quieta…');return;}
-      this.angles=g.angles.map((a,i)=>a+angle(fist.orientation[['pitch','yaw','roll'][i]],g.orientation[['pitch','yaw','roll'][i]]));
-      this.anchor={x:g.anchor.x+fist.center.x-g.fist.x,y:g.anchor.y+fist.center.y-g.fist.y};
-      this.depth=clamp(g.depth*g.palmScale/Math.max(.015,fist.palmScale),8,40);
-      this.status('Puño: giro y desplazamiento · palma abierta: referencia fija');return;
-    }
     const pinches=hands.filter(h=>h.pinching);
-    if(pinches.length===2 && !this.placing){
-      const points=pinches.map(h=>this.screenPoint(h.point));const dist=distance(pinches[0].point,pinches[1].point);
-      if(!['zoom','double'].includes(this.gesture?.key)){
-        this.gesture={key:dist<=.28?'zoom':'double',distance:Math.max(.025,dist),scale:this.scale,points,ids:points.map(p=>this.pick(p))};
+    const claw=hands.find(h=>h.claw);
+    if(pinches.length>=2 && !this.placing){
+      this.onMotion?.('zoom');
+      const ordered=pinches.slice().sort((a,b)=>a.handIndex-b.handIndex);
+      const key=ordered.map(h=>h.handIndex).join(',');
+      const separation=distance(this.screenPoint(ordered[0].point),this.screenPoint(ordered[1].point));
+      if(this.gesture?.key!=='zoom' || this.gesture.handsKey!==key || this.gesture.separation<=.02){
+        this.gesture={key:'zoom',handsKey:key,separation,scale:this.scale};
+      } else if(separation>.02) this.scale=clamp(this.gesture.scale*separation/this.gesture.separation,.05,4);
+      this.status('Dos pellizcos: separa para acercar; junta para alejar.');return;
+    }
+    if(this.gesture?.key==='zoom')this.gesture={key:'zoom-release'};
+    if(this.gesture?.key==='zoom-release' && pinches.length){
+      this.onMotion?.(null);
+      this.status('Abre ambos pellizcos antes de volver a mover un planeta.');return;
+    }
+    if(claw && !pinches.length && !this.placing){
+      this.onMotion?.('grab');
+      const center=this.screenPoint(claw.center);
+      if(this.gesture?.key!=='claw' || this.gesture.handIndex!==claw.handIndex){
+        this.gesture={key:'claw',handIndex:claw.handIndex,center,originalAnchor:{...this.anchor}};
       }
-      const g=this.gesture;
-      if(g.key==='zoom'){this.scale=clamp(g.scale*dist/g.distance,.05,4);this.status('Zoom de la maqueta con dos pinzas');}
-      else {g.ids.forEach((id,i)=>{if(id!==null && (i===0||id!==g.ids[0]))this.movePlanet(id,points[i].x-g.points[i].x,points[i].y-g.points[i].y);});g.points=points;this.status('Dos pinzas separadas: mueve un planeta con cada mano');}
+      this.anchor.x+=center.x-this.gesture.center.x;
+      this.anchor.y+=center.y-this.gesture.center.y;
+      this.gesture.center=center;
+      this.status('Garra: moviendo el sistema. Suelta para deslizarlo; barre lateralmente con la palma abierta para cambiar de modelo.');return;
+    }
+    if(pinches.length && !this.placing){
+      const key=pinches.map(h=>h.handIndex).sort((a,b)=>a-b).join(',');
+      if(this.gesture?.key!=='grab' || this.gesture.handsKey!==key){
+        this.gesture={key:'grab',handsKey:key,entries:pinches.map(hand=>({
+          handIndex:hand.handIndex,
+          id:this.gestureSelections[hand.handIndex]??this.selected,
+          point:this.screenPoint(hand.point)
+        }))};
+      }
+      const moved=new Set();
+      for(const entry of this.gesture.entries){
+        const hand=pinches.find(h=>h.handIndex===entry.handIndex);
+        const point=this.screenPoint(hand.point);
+        if(entry.id!==null && !moved.has(entry.id)){
+          this.movePlanet(entry.id,point.x-entry.point.x,point.y-entry.point.y);moved.add(entry.id);
+        }
+        entry.point=point;
+      }
+      this.onMotion?.(moved.size?'grab':null);
+      this.status(moved.size?'Pellizco: moviendo únicamente los planetas seleccionados.':'Selecciona primero un planeta con el índice; después haz pellizco.');return;
+    }
+    this.onMotion?.(null);
+    const pointers=hands.filter(h=>h.pointing);
+    if(pointers.length){
+      if(this.placing){
+        const point=this.screenPoint(pointers[0].pointerPoint);
+        if(this.gesture?.key!=='place'||distance(point,this.gesture.point)>.035)this.gesture={key:'place',since:now,point};
+        if(now-this.gesture.since>1000)this.place(point);return;
+      }
+      this.gesture=null;
+      const ids=[];
+      for(const hand of pointers){
+        const id=this.pick(this.screenPoint(hand.pointerPoint));
+        if(id!==null){this.selected=id;this.gestureSelections[hand.handIndex]=id;ids.push(id);}
+      }
+      if(ids.length){
+        if(ids.length!==this.selectedIds.size || ids.some(id=>!this.selectedIds.has(id)))this.onSound?.('select');
+        this.selectedIds=new Set(ids);
+        this.status(pointers.length>1?`Selección múltiple: ${this.selectedIds.size} planetas · dos pellizcos hacen zoom.`:`${this.names?.[this.selected] || PLANETS[this.selected][0]} seleccionado · pellizco para moverlo.`);
+      }
       return;
     }
-    const palms=hands.filter(h=>h.openPalm);
-    if(palms.length===2 && !this.placing){const center={x:(palms[0].center.x+palms[1].center.x)/2,y:(palms[0].center.y+palms[1].center.y)/2};
-      if(this.gesture?.key!=='pan')this.gesture={key:'pan',center};
-      this.anchor.x+=center.x-this.gesture.center.x;this.anchor.y+=center.y-this.gesture.center.y;this.gesture.center=center;this.status('Desplazando la maqueta con dos palmas');return;
-    }
-    const pointer=hands.find(h=>h.pointing);
-    if(pointer){const point=this.screenPoint(pointer.pointerPoint);
-      if(this.placing){if(this.gesture?.key!=='place'||distance(point,this.gesture.point)>.035)this.gesture={key:'place',since:now,point};if(now-this.gesture.since>1000)this.place(point);return;}
-      this.gesture=null;const id=this.pick(point);if(id!==null){this.selected=id;this.status(`${PLANETS[id][0]} · une índice y pulgar, con los otros tres dedos arriba, para tomarlo.`);}return;
-    }
-    if(pinches.length===1 && !this.placing){const point=this.screenPoint(pinches[0].point);
-      if(this.gesture?.key!=='grab'){const id=this.pick(point);this.gesture={key:'grab',id,point};if(id!==null)this.selected=id;}
-      const g=this.gesture;if(g.id!==null){this.movePlanet(g.id,point.x-g.point.x,point.y-g.point.y);this.status(`Moviendo ${PLANETS[g.id][0]}`);}g.point=point;return;
-    }
     this.gesture=null;
-    if(fist)this.status('Para girar, muestra también la otra palma abierta y fija.');
   }
 }
